@@ -37,10 +37,17 @@ def short_path(p):
 
 def main():
     kind = sys.argv[1] if len(sys.argv) > 1 else "notification"
+    raw = sys.stdin.read()
     try:
-        hook = json.load(sys.stdin)
+        hook = json.loads(raw)
     except Exception:
         hook = {}
+    if os.environ.get("VIBE_DEBUG") == "1":
+        try:
+            with open("/tmp/vibe-hook-debug.jsonl", "a") as _f:
+                _f.write(kind + " " + raw + "\n")
+        except Exception:
+            pass
 
     session = hook.get("session_id", "claude-session")
     cwd = hook.get("cwd", "")
@@ -53,19 +60,19 @@ def main():
         "terminal": "Terminal",
     }
 
-    # Blocking approvals are OFF by default: the island monitors sessions hook-free,
-    # so we don't want to interrupt every tool call. Turn them on explicitly with
-    # `export VIBE_APPROVALS=1`, and even then we never gate when Claude Code is
-    # already in a non-interactive permission mode (bypass / acceptEdits).
-    approvals = os.environ.get("VIBE_APPROVALS") == "1"
+    # Show a blocking approval card only when Claude Code is in an interactive
+    # permission mode. In bypass/acceptEdits mode Claude proceeds on its own, so we
+    # stay out of the way and just report activity (no prompt on every tool call).
+    # `export VIBE_APPROVALS=0` disables approvals entirely.
     mode = hook.get("permission_mode") or hook.get("permissionMode") or "default"
     interactive_mode = mode not in ("bypassPermissions", "acceptEdits")
+    ask = interactive_mode and os.environ.get("VIBE_APPROVALS") != "0"
 
     try:
         if kind == "pretooluse":
             tool = hook.get("tool_name", "Tool")
             tin = hook.get("tool_input", {}) or {}
-            if approvals and interactive_mode:
+            if ask:
                 event = dict(base, type="permission", tool=tool,
                              file=short_path(tin.get("file_path")),
                              command=tin.get("command"),

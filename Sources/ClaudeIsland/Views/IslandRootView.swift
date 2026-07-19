@@ -6,6 +6,7 @@ struct IslandRootView: View {
     let geometry: NotchGeometry
     @EnvironmentObject var store: SessionStore
     @State private var hovering = false
+    @State private var collapseTask: DispatchWorkItem?
 
     private var expanded: Bool { store.isExpanded || hovering }
 
@@ -38,9 +39,19 @@ struct IslandRootView: View {
                                 notchHeight: geometry.notchHeight)
             }
         }
+        .contentShape(Rectangle())   // whole bounds hoverable, incl. the notch gap
         .onHover { inside in
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) {
-                hovering = inside
+            collapseTask?.cancel()
+            if inside {
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) { hovering = true }
+            } else {
+                // Delay collapse slightly so brief tracking drops near the notch
+                // don't cause flicker.
+                let task = DispatchWorkItem {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) { hovering = false }
+                }
+                collapseTask = task
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: task)
             }
         }
         .onTapGesture {
