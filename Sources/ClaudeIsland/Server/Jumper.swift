@@ -22,29 +22,30 @@ enum Jumper {
     ]
 
     private static let editors: Set<String> = ["VS Code", "Cursor", "Windsurf"]
+    private static let editorBundles: Set<String> = [
+        "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.visualstudio.code.oss",
+        "com.todesktop.230313mzl4w4u92", "com.exafunction.windsurf",
+    ]
 
     static func jump(to session: AgentSession) {
-        // Editors: reopen the workspace so its window comes forward.
-        if editors.contains(session.terminal), let path = session.workspacePath {
-            let app = editorAppName(session.terminal)
+        // Prefer the exact host app the hook reported via TERM_PROGRAM.
+        let bundle = session.terminalBundleID ?? bundleIDs[session.terminal]
+
+        // For editors, reopen the workspace so the right window comes forward — this
+        // also focuses a session running in the editor's integrated terminal.
+        let isEditor = editors.contains(session.terminal)
+            || (bundle.map(editorBundles.contains) ?? false)
+        if isEditor, let path = session.workspacePath {
+            let app = bundle ?? "com.microsoft.VSCode"
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            proc.arguments = ["-a", app, path]
+            proc.arguments = ["-b", app, path]
             try? proc.run()
             return
         }
-        // Otherwise just bring the app to the front.
-        if let bundleID = bundleIDs[session.terminal] {
-            activate(bundleID: bundleID)
-        }
-    }
 
-    private static func editorAppName(_ terminal: String) -> String {
-        switch terminal {
-        case "VS Code": return "Visual Studio Code"
-        case "Cursor": return "Cursor"
-        case "Windsurf": return "Windsurf"
-        default: return terminal
+        if let bundle {
+            activate(bundleID: bundle)
         }
     }
 

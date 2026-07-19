@@ -175,6 +175,7 @@ struct AgentSession: Identifiable, Equatable {
     var question: AgentQuestion?
     var tokens: Int             // total tokens used this session (0 if unknown)
     var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
+    var terminalBundleID: String?  // real host app bundle id (from the hook's TERM_PROGRAM)
 
     init(id: UUID = UUID(),
          agent: AgentKind,
@@ -187,8 +188,10 @@ struct AgentSession: Identifiable, Equatable {
          permission: PermissionRequest? = nil,
          question: AgentQuestion? = nil,
          tokens: Int = 0,
-         workspacePath: String? = nil) {
+         workspacePath: String? = nil,
+         terminalBundleID: String? = nil) {
         self.workspacePath = workspacePath
+        self.terminalBundleID = terminalBundleID
         self.id = id
         self.agent = agent
         self.title = title

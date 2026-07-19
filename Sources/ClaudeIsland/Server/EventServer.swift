@@ -103,6 +103,8 @@ final class EventServer {
                     s.status = .waiting
                     s.permission = request
                     if let m = event.message { s.lastMessage = m }
+                    if let term = event.terminal { s.terminal = term }
+                    if let bundle = event.term_bundle { s.terminalBundleID = bundle }
                 }
             } else {
                 store.upsert(sessionFor(id: sessionID, agent: agent, event: event,
@@ -146,6 +148,9 @@ final class EventServer {
                 s.status = status
                 if let msg = event.message { s.lastMessage = msg }
                 if let title = event.title { s.title = title }
+                // The hook knows the real host terminal from TERM_PROGRAM — trust it.
+                if let term = event.terminal { s.terminal = term }
+                if let bundle = event.term_bundle { s.terminalBundleID = bundle }
             }
         } else {
             store.upsert(sessionFor(id: id, agent: agent, event: event, status: status))
@@ -163,7 +168,8 @@ final class EventServer {
                      lastMessage: event.message ?? status.label,
                      status: status,
                      permission: permission,
-                     question: question)
+                     question: question,
+                     terminalBundleID: event.term_bundle)
     }
 
     // MARK: - Replies back to a blocked hook
@@ -196,6 +202,7 @@ struct AgentEvent: Decodable {
     var agent: String?               // claude | codex | gemini ...
     var title: String?
     var terminal: String?
+    var term_bundle: String?         // host app bundle id for precise Jump
     var message: String?
     var status: String?              // working | waiting | idle ...
 

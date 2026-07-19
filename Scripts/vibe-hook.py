@@ -58,6 +58,47 @@ def short_path(p):
     return "/".join(parts[-3:]) if len(parts) > 3 else p
 
 
+def detect_terminal():
+    """Identify the real host terminal/IDE from the CLI's environment.
+
+    TERM_PROGRAM tells us the terminal; for VS Code-family editors we use the
+    hosting app's bundle id to tell VS Code / Cursor / Windsurf apart. Returns
+    (label, bundle_id)."""
+    tp = os.environ.get("TERM_PROGRAM", "") or ""
+    bundle = os.environ.get("__CFBundleIdentifier", "") or ""
+
+    vscode_family = {
+        "com.microsoft.VSCode": "VS Code",
+        "com.microsoft.VSCodeInsiders": "VS Code",
+        "com.visualstudio.code.oss": "VS Code",
+        "com.todesktop.230313mzl4w4u92": "Cursor",
+        "com.exafunction.windsurf": "Windsurf",
+    }
+    known = {
+        "Apple_Terminal": ("Terminal", "com.apple.Terminal"),
+        "iTerm.app": ("iTerm", "com.googlecode.iterm2"),
+        "ghostty": ("Ghostty", "com.mitchellh.ghostty"),
+        "WezTerm": ("WezTerm", "com.github.wez.wezterm"),
+        "WarpTerminal": ("Warp", "dev.warp.Warp-Stable"),
+        "Hyper": ("Hyper", "co.zeit.hyper"),
+        "Tabby": ("Tabby", "org.tabby"),
+        "kitty": ("Kitty", "net.kovidgoyal.kitty"),
+        "rio": ("Rio", "com.raphaelamorim.rio"),
+    }
+
+    if tp == "vscode":
+        label = vscode_family.get(bundle, "VS Code")
+        return label, (bundle or "com.microsoft.VSCode")
+    if tp in known:
+        label, bid = known[tp]
+        return label, bid
+    if bundle in vscode_family:
+        return vscode_family[bundle], bundle
+    if bundle:
+        return (tp or "Terminal"), bundle
+    return (tp or "Terminal"), None
+
+
 def main():
     kind = sys.argv[1] if len(sys.argv) > 1 else "notification"
     raw = sys.stdin.read()
@@ -76,11 +117,13 @@ def main():
     cwd = hook.get("cwd", "")
     title = cwd.split("/")[-1] if cwd else "claude session"
 
+    term_label, term_bundle = detect_terminal()
     base = {
         "session": session,
         "agent": "claude",
         "title": title,
-        "terminal": "Terminal",
+        "terminal": term_label,
+        "term_bundle": term_bundle,
     }
 
     mode = hook.get("permission_mode") or hook.get("permissionMode") or "default"

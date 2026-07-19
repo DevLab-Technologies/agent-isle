@@ -79,7 +79,9 @@ final class IdeWatcher {
             if store.sessions.contains(where: { $0.id == id }) {
                 store.update(id: id) { s in
                     s.title = title
-                    s.terminal = terminal
+                    // Keep the hook's precise terminal (from TERM_PROGRAM) if we have it;
+                    // the transcript only knows cli vs IDE, not which terminal app.
+                    if s.terminalBundleID == nil { s.terminal = terminal }
                     s.lastMessage = activity.text
                     s.tokens = tokens
                     s.workspacePath = activity.cwd
