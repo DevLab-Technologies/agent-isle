@@ -25,11 +25,15 @@ settings_path, hook = sys.argv[1], sys.argv[2]
 with open(settings_path) as f:
     settings = json.load(f)
 
-def entry(kind):
-    return {"hooks": [{"type": "command", "command": f"python3 '{hook}' {kind}"}]}
+def entry(kind, timeout=None):
+    cmd = {"type": "command", "command": f"python3 '{hook}' {kind}"}
+    if timeout:
+        cmd["timeout"] = timeout
+    return {"hooks": [cmd]}
 
 hooks = settings.setdefault("hooks", {})
-hooks["PreToolUse"]        = [dict(entry("pretooluse"),  matcher="*")]
+# PreToolUse blocks while you decide from the notch, so give it a long timeout.
+hooks["PreToolUse"]        = [dict(entry("pretooluse", timeout=300), matcher="*")]
 hooks["PostToolUse"]       = [dict(entry("posttooluse"), matcher="*")]
 hooks["Notification"]      = [entry("notification")]
 hooks["Stop"]              = [entry("stop")]

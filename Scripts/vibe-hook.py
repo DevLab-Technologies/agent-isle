@@ -13,11 +13,34 @@ Usage:  vibe-hook.py <event-kind>
         event-kind in: pretooluse | posttooluse | notification | stop | userprompt
 """
 import json
+import os
 import sys
 import urllib.request
 
 ISLAND_URL = "http://localhost:4711/event"
-TIMEOUT = 600  # allow the user plenty of time to decide from the notch
+TIMEOUT = 280  # seconds to wait for a notch decision before falling back to Claude's own prompt
+
+# Tools Claude Code never prompts for (read-only / bookkeeping) — don't gate these.
+READONLY_TOOLS = {
+    "Read", "Glob", "Grep", "LS", "NotebookRead", "TodoWrite", "Task",
+    "WebSearch", "BashOutput", "KillBash",
+}
+# Tools that are auto-approved specifically in acceptEdits mode.
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "Update"}
+
+
+def should_ask(mode, tool):
+    """Mirror when Claude Code would actually prompt, so the island intercepts the
+    same requests instead of prompting on every tool or on none."""
+    if os.environ.get("VIBE_APPROVALS") == "0":
+        return False
+    if mode == "bypassPermissions" or mode == "plan":
+        return False
+    if tool in READONLY_TOOLS:
+        return False
+    if mode == "acceptEdits" and tool in EDIT_TOOLS:
+        return False
+    return True  # default / acceptEdits(non-edit) / unknown mode
 
 
 def post(payload, timeout=5):
@@ -60,19 +83,13 @@ def main():
         "terminal": "Terminal",
     }
 
-    # Show a blocking approval card only when Claude Code is in an interactive
-    # permission mode. In bypass/acceptEdits mode Claude proceeds on its own, so we
-    # stay out of the way and just report activity (no prompt on every tool call).
-    # `export VIBE_APPROVALS=0` disables approvals entirely.
     mode = hook.get("permission_mode") or hook.get("permissionMode") or "default"
-    interactive_mode = mode not in ("bypassPermissions", "acceptEdits")
-    ask = interactive_mode and os.environ.get("VIBE_APPROVALS") != "0"
 
     try:
         if kind == "pretooluse":
             tool = hook.get("tool_name", "Tool")
             tin = hook.get("tool_input", {}) or {}
-            if ask:
+            if should_ask(mode, tool):
                 event = dict(base, type="permission", tool=tool,
                              file=short_path(tin.get("file_path")),
                              command=tin.get("command"),
