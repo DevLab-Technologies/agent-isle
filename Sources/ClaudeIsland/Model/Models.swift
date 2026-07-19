@@ -1,0 +1,191 @@
+import SwiftUI
+
+/// Shared UI colors used outside the status enum.
+enum Palette {
+    static let deny = Color(red: 0.95, green: 0.42, blue: 0.42)
+    static let allow = Color(red: 0.36, green: 0.83, blue: 0.55)
+}
+
+/// The coding agent behind a session.
+enum AgentKind: String, Codable, CaseIterable, Identifiable {
+    case claude
+    case codex
+    case gemini
+    case cursor
+    case opencode
+    case droid
+    case kiro
+    case amp
+    case unknown
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .gemini: return "Gemini"
+        case .cursor: return "Cursor"
+        case .opencode: return "OpenCode"
+        case .droid: return "Droid"
+        case .kiro: return "Kiro"
+        case .amp: return "Amp"
+        case .unknown: return "Agent"
+        }
+    }
+
+    /// Accent color used for the agent's badge and status dot.
+    var tint: Color {
+        switch self {
+        case .claude: return Color(red: 0.85, green: 0.53, blue: 0.32) // Claude orange
+        case .codex: return Color(red: 0.36, green: 0.83, blue: 0.55)  // green
+        case .gemini: return Color(red: 0.42, green: 0.60, blue: 0.98) // blue
+        case .cursor: return Color(red: 0.75, green: 0.75, blue: 0.80)
+        case .opencode: return Color(red: 0.94, green: 0.76, blue: 0.35)
+        case .droid: return Color(red: 0.55, green: 0.78, blue: 0.98)
+        case .kiro: return Color(red: 0.80, green: 0.52, blue: 0.96)
+        case .amp: return Color(red: 0.98, green: 0.45, blue: 0.55)
+        case .unknown: return Color.gray
+        }
+    }
+
+    /// Single-glyph mark shown in the compact badge.
+    var glyph: String {
+        switch self {
+        case .claude: return "✳"
+        case .codex: return "⬡"
+        case .gemini: return "◆"
+        case .cursor: return "▸"
+        case .opencode: return "◇"
+        case .droid: return "◈"
+        case .kiro: return "❖"
+        case .amp: return "⚡"
+        case .unknown: return "●"
+        }
+    }
+}
+
+/// What an agent session is currently doing.
+enum SessionStatus: String, Codable {
+    case working        // actively producing output
+    case waiting        // needs a permission decision
+    case asking         // asking the user a question
+    case done           // finished, waiting to be acknowledged
+    case idle           // connected but quiet
+
+    var label: String {
+        switch self {
+        case .working: return "Working"
+        case .waiting: return "Permission"
+        case .asking: return "Question"
+        case .done: return "Done"
+        case .idle: return "Idle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .working: return Color(red: 0.42, green: 0.60, blue: 0.98)
+        case .waiting: return Color(red: 0.98, green: 0.72, blue: 0.30)
+        case .asking: return Color(red: 0.70, green: 0.55, blue: 0.98)
+        case .done: return Color(red: 0.36, green: 0.83, blue: 0.55)
+        case .idle: return Color(white: 0.5)
+        }
+    }
+
+    /// Ordering priority when picking which session the collapsed island shows.
+    var priority: Int {
+        switch self {
+        case .waiting: return 0
+        case .asking: return 1
+        case .working: return 2
+        case .done: return 3
+        case .idle: return 4
+        }
+    }
+}
+
+/// A pending permission request (e.g. an edit or command the agent wants to run).
+struct PermissionRequest: Identifiable, Equatable {
+    let id: UUID
+    var toolName: String        // "Edit", "Bash", "Write"...
+    var filePath: String?       // affected path, if any
+    var command: String?        // shell command, if any
+    var diffAdded: Int
+    var diffRemoved: Int
+    var previewLines: [DiffLine]
+
+    init(id: UUID = UUID(),
+         toolName: String,
+         filePath: String? = nil,
+         command: String? = nil,
+         diffAdded: Int = 0,
+         diffRemoved: Int = 0,
+         previewLines: [DiffLine] = []) {
+        self.id = id
+        self.toolName = toolName
+        self.filePath = filePath
+        self.command = command
+        self.diffAdded = diffAdded
+        self.diffRemoved = diffRemoved
+        self.previewLines = previewLines
+    }
+}
+
+struct DiffLine: Identifiable, Equatable {
+    let id = UUID()
+    enum Kind { case context, added, removed }
+    var kind: Kind
+    var lineNumber: Int?
+    var text: String
+}
+
+/// A question the agent is asking, with selectable options.
+struct AgentQuestion: Equatable {
+    var prompt: String
+    var options: [String]
+}
+
+/// One monitored agent session.
+struct AgentSession: Identifiable, Equatable {
+    let id: UUID
+    var agent: AgentKind
+    var title: String           // task / branch name, e.g. "fix auth bug"
+    var terminal: String        // "iTerm", "Ghostty"...
+    var lastMessage: String     // latest line of activity
+    var status: SessionStatus
+    var startedAt: Date
+    var updatedAt: Date
+    var permission: PermissionRequest?
+    var question: AgentQuestion?
+
+    init(id: UUID = UUID(),
+         agent: AgentKind,
+         title: String,
+         terminal: String,
+         lastMessage: String,
+         status: SessionStatus,
+         startedAt: Date = Date(),
+         updatedAt: Date = Date(),
+         permission: PermissionRequest? = nil,
+         question: AgentQuestion? = nil) {
+        self.id = id
+        self.agent = agent
+        self.title = title
+        self.terminal = terminal
+        self.lastMessage = lastMessage
+        self.status = status
+        self.startedAt = startedAt
+        self.updatedAt = updatedAt
+        self.permission = permission
+        self.question = question
+    }
+
+    /// Human-friendly elapsed time since the session started.
+    var elapsedText: String {
+        let s = Int(Date().timeIntervalSince(startedAt))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m" }
+        return "\(s / 3600)h"
+    }
+}

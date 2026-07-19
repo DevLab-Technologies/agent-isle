@@ -1,0 +1,14 @@
+# Swift / SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Build output
+build/
+dist/
+
+# Generated icon preview
+Sources/ClaudeIsland/Resources/icon_preview.png
+
+# macOS
+.DS_Store
