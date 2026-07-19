@@ -49,8 +49,7 @@ struct CollapsedIsland: View {
                     .lineLimit(1)
             }
         } else {
-            Text("🏝️")
-                .font(.system(size: 13))
+            AppMark(size: 15)
         }
     }
 

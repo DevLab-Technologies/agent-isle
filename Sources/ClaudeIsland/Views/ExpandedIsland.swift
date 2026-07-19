@@ -33,7 +33,7 @@ struct ExpandedIsland: View {
     private var notchBar: some View {
         HStack(spacing: 0) {
             HStack(spacing: 7) {
-                Text("🏝️").font(.system(size: 12))
+                AppMark(size: 14)
                 Text("CLAUDE ISLAND")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.2)
