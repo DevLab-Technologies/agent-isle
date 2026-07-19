@@ -27,6 +27,8 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
     case codex
     case gemini
     case cursor
+    case grok
+    case copilot
     case opencode
     case droid
     case kiro
@@ -41,6 +43,8 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
         case .codex: return "Codex"
         case .gemini: return "Gemini"
         case .cursor: return "Cursor"
+        case .grok: return "Grok"
+        case .copilot: return "Copilot"
         case .opencode: return "OpenCode"
         case .droid: return "Droid"
         case .kiro: return "Kiro"
@@ -56,6 +60,8 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
         case .codex: return Color(red: 0.36, green: 0.83, blue: 0.55)  // green
         case .gemini: return Color(red: 0.42, green: 0.60, blue: 0.98) // blue
         case .cursor: return Color(red: 0.75, green: 0.75, blue: 0.80)
+        case .grok: return Color(red: 0.12, green: 0.12, blue: 0.14)    // Grok near-black
+        case .copilot: return Color(red: 0.60, green: 0.65, blue: 0.72) // Copilot gray-blue
         case .opencode: return Color(red: 0.94, green: 0.76, blue: 0.35)
         case .droid: return Color(red: 0.55, green: 0.78, blue: 0.98)
         case .kiro: return Color(red: 0.80, green: 0.52, blue: 0.96)
@@ -71,6 +77,8 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
         case .codex: return "⬡"
         case .gemini: return "◆"
         case .cursor: return "▸"
+        case .grok: return "𝕏"
+        case .copilot: return "⊚"
         case .opencode: return "◇"
         case .droid: return "◈"
         case .kiro: return "❖"

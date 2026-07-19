@@ -105,6 +105,27 @@ final class IdeWatcher {
                     workspacePath: activity.cwd))
             }
         }
+        // Other agents (Grok, Copilot, …) discovered from their own history files.
+        for e in ExternalAgents.scanAll(activeWindow: activeWindow, maxPerAgent: 5) {
+            found.insert(e.id)
+            trackedIDs.insert(e.id)
+            let working = Date().timeIntervalSince(e.mtime) < workingWindow
+            if store.sessions.contains(where: { $0.id == e.id }) {
+                store.update(id: e.id) { s in
+                    s.title = e.title
+                    s.lastMessage = e.lastMessage
+                    s.workspacePath = e.cwd
+                    s.status = working ? .working : .idle
+                }
+            } else {
+                if store.demoMode { store.stopDemo(); store.clearAll() }
+                store.upsert(AgentSession(
+                    id: e.id, agent: e.agent, title: e.title, terminal: e.terminal,
+                    lastMessage: e.lastMessage, status: working ? .working : .idle,
+                    startedAt: e.mtime, updatedAt: e.mtime, workspacePath: e.cwd))
+            }
+        }
+
         pruneMissing(current: found)
     }
 

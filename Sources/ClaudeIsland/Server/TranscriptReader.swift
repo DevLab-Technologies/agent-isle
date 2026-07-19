@@ -10,6 +10,19 @@ enum TranscriptReader {
         var entrypoint: String?
     }
 
+    /// Generic tail reader: walk the last chunk of a JSONL file newest-first and return
+    /// the first non-nil result of `transform`, condensed to one line.
+    static func lastText(in url: URL, maxBytes: Int = 48 * 1024,
+                         transform: ([String: Any]) -> String?) -> String? {
+        let lines = tailLines(of: url, maxBytes: maxBytes)
+        for raw in lines.reversed() {
+            guard let d = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            if let t = transform(obj), !t.isEmpty { return firstLine(t) }
+        }
+        return nil
+    }
+
     /// Total tokens used across the whole session by summing per-message `usage`
     /// (input + output + cache read/creation). Reads the full file, so callers should
     /// cache the result by file modification time.
