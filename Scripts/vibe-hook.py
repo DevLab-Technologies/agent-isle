@@ -53,24 +53,37 @@ def main():
         "terminal": "Terminal",
     }
 
+    # Blocking approvals are OFF by default: the island monitors sessions hook-free,
+    # so we don't want to interrupt every tool call. Turn them on explicitly with
+    # `export VIBE_APPROVALS=1`, and even then we never gate when Claude Code is
+    # already in a non-interactive permission mode (bypass / acceptEdits).
+    approvals = os.environ.get("VIBE_APPROVALS") == "1"
+    mode = hook.get("permission_mode") or hook.get("permissionMode") or "default"
+    interactive_mode = mode not in ("bypassPermissions", "acceptEdits")
+
     try:
         if kind == "pretooluse":
             tool = hook.get("tool_name", "Tool")
             tin = hook.get("tool_input", {}) or {}
-            event = dict(base, type="permission", tool=tool,
-                         file=short_path(tin.get("file_path")),
-                         command=tin.get("command"),
-                         message=f"Wants to run {tool}")
-            result = post(event, timeout=TIMEOUT)
-            decision = result.get("decision", "allow")
-            allow = decision not in ("deny", "no")
-            print(json.dumps({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow" if allow else "deny",
-                    "permissionDecisionReason": "Decided from Claude Island",
-                }
-            }))
+            if approvals and interactive_mode:
+                event = dict(base, type="permission", tool=tool,
+                             file=short_path(tin.get("file_path")),
+                             command=tin.get("command"),
+                             message=f"Wants to run {tool}")
+                result = post(event, timeout=TIMEOUT)
+                decision = result.get("decision", "allow")
+                allow = decision not in ("deny", "no")
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow" if allow else "deny",
+                        "permissionDecisionReason": "Decided from Claude Island",
+                    }
+                }))
+            else:
+                # Non-blocking: just report activity, let Claude Code proceed normally.
+                post(dict(base, type="status", status="working",
+                          message=f"Running {tool}"))
             sys.exit(0)
 
         elif kind == "posttooluse":

@@ -12,6 +12,10 @@ final class SessionStore: ObservableObject {
     @Published var isExpanded: Bool = false
     @Published var demoMode: Bool = true
 
+    /// Current rendered size of the island, reported by SwiftUI so the window can
+    /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.
+    @Published var islandSize: CGSize = CGSize(width: 520, height: 64)
+
     private var demoTimer: Timer?
 
     // MARK: - Derived state

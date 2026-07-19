@@ -158,6 +158,7 @@ struct AgentSession: Identifiable, Equatable {
     var updatedAt: Date
     var permission: PermissionRequest?
     var question: AgentQuestion?
+    var tokens: Int             // total tokens used this session (0 if unknown)
 
     init(id: UUID = UUID(),
          agent: AgentKind,
@@ -168,7 +169,8 @@ struct AgentSession: Identifiable, Equatable {
          startedAt: Date = Date(),
          updatedAt: Date = Date(),
          permission: PermissionRequest? = nil,
-         question: AgentQuestion? = nil) {
+         question: AgentQuestion? = nil,
+         tokens: Int = 0) {
         self.id = id
         self.agent = agent
         self.title = title
@@ -179,6 +181,15 @@ struct AgentSession: Identifiable, Equatable {
         self.updatedAt = updatedAt
         self.permission = permission
         self.question = question
+        self.tokens = tokens
+    }
+
+    /// Compact human-readable token count, e.g. "48.2k" or "1.3M".
+    var tokenText: String? {
+        guard tokens > 0 else { return nil }
+        if tokens >= 1_000_000 { return String(format: "%.1fM", Double(tokens) / 1_000_000) }
+        if tokens >= 1_000 { return String(format: "%.1fk", Double(tokens) / 1_000) }
+        return "\(tokens)"
     }
 
     /// Human-friendly elapsed time since the session started.

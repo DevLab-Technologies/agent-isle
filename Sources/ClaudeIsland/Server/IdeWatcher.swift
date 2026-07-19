@@ -23,6 +23,8 @@ final class IdeWatcher {
     private let maxSessions = 10
 
     private var trackedIDs: Set<UUID> = []
+    /// Cache of token totals keyed by session id, invalidated when the file changes.
+    private var tokenCache: [String: (mtime: Date, tokens: Int)] = [:]
 
     init(store: SessionStore) {
         self.store = store
@@ -63,19 +65,24 @@ final class IdeWatcher {
             let source = SessionSource(entrypoint: activity.entrypoint)
             guard source.include else { continue }
 
-            let id = UUID.deterministic(from: "session:" + c.sessionID)
+            // Same id scheme the EventServer uses (deterministic from the session id),
+            // so a hook's permission attaches to this session instead of duplicating it.
+            let id = UUID.deterministic(from: c.sessionID)
             found.insert(id)
             trackedIDs.insert(id)
 
             let title = displayTitle(activity: activity)
             let working = Date().timeIntervalSince(c.mtime) < workingWindow
             let terminal = source.label
+            let tokens = tokens(for: c)
 
             if store.sessions.contains(where: { $0.id == id }) {
                 store.update(id: id) { s in
                     s.title = title
                     s.terminal = terminal
                     s.lastMessage = activity.text
+                    s.tokens = tokens
+                    // Don't override a pending permission/question or its waiting status.
                     if s.permission == nil && s.question == nil {
                         s.status = working ? .working : .idle
                     }
@@ -90,13 +97,25 @@ final class IdeWatcher {
                     lastMessage: activity.text,
                     status: working ? .working : .idle,
                     startedAt: (try? c.url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? c.mtime,
-                    updatedAt: c.mtime))
+                    updatedAt: c.mtime,
+                    tokens: tokens))
             }
         }
         pruneMissing(current: found)
     }
 
-    /// Newest transcript per project folder, limited to recently-touched ones.
+    /// Token total for a session, cached by transcript modification time.
+    private func tokens(for c: Candidate) -> Int {
+        if let cached = tokenCache[c.sessionID], cached.mtime == c.mtime {
+            return cached.tokens
+        }
+        let total = TranscriptReader.sessionTokens(in: c.url)
+        tokenCache[c.sessionID] = (c.mtime, total)
+        return total
+    }
+
+    /// Every transcript touched within the active window (so concurrent sessions in the
+    /// same repo each appear), most-recent first, capped at `maxSessions`.
     private func activeTranscripts() -> [Candidate] {
         guard let folders = try? FileManager.default.contentsOfDirectory(
             at: projectsDir, includingPropertiesForKeys: nil) else { return [] }
@@ -106,15 +125,13 @@ final class IdeWatcher {
         for folder in folders {
             guard let files = try? FileManager.default.contentsOfDirectory(
                 at: folder, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
-            let newest = files
-                .filter { $0.pathExtension == "jsonl" }
-                .compactMap { url -> Candidate? in
-                    let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                    return Candidate(url: url, sessionID: url.deletingPathExtension().lastPathComponent, mtime: m)
+            for url in files where url.pathExtension == "jsonl" {
+                let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                if now.timeIntervalSince(m) < activeWindow {
+                    candidates.append(Candidate(url: url,
+                                                sessionID: url.deletingPathExtension().lastPathComponent,
+                                                mtime: m))
                 }
-                .max { $0.mtime < $1.mtime }
-            if let newest, now.timeIntervalSince(newest.mtime) < activeWindow {
-                candidates.append(newest)
             }
         }
         return Array(candidates.sorted { $0.mtime > $1.mtime }.prefix(maxSessions))

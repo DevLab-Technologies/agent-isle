@@ -45,7 +45,7 @@ struct ExpandedIsland: View {
 
             Color.clear.frame(width: notchWidth)   // physical notch
 
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 if store.attentionCount > 0 {
                     CountBadge(count: store.attentionCount, color: SessionStatus.waiting.color)
                 }
@@ -53,11 +53,35 @@ struct ExpandedIsland: View {
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.45))
                     .lineLimit(1)
+                settingsMenu
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.trailing, 16)
+            .padding(.trailing, 14)
         }
         .frame(height: max(notchHeight, 32))
+    }
+
+    /// Gear menu — the reliable way to quit and toggle settings, since the menu-bar
+    /// item can be hidden behind the notch on notched Macs.
+    private var settingsMenu: some View {
+        Menu {
+            Button(SoundPlayer.shared.enabled ? "Mute Sound Alerts" : "Enable Sound Alerts") {
+                SoundPlayer.shared.enabled.toggle()
+            }
+            Button(store.demoMode ? "Stop Demo Mode" : "Start Demo Mode") {
+                store.demoMode ? store.stopDemo() : store.startDemo()
+            }
+            Divider()
+            Button("Quit Claude Island") { NSApp.terminate(nil) }
+        } label: {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(width: 18)
     }
 
     private var sessionList: some View {

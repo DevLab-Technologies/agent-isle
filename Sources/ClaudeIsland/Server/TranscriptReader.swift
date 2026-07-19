@@ -10,6 +10,35 @@ enum TranscriptReader {
         var entrypoint: String?
     }
 
+    /// Total tokens used across the whole session by summing per-message `usage`
+    /// (input + output + cache read/creation). Reads the full file, so callers should
+    /// cache the result by file modification time.
+    static func sessionTokens(in url: URL, maxBytes: Int = 12_000_000) -> Int {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: 0)
+        let data: Data = size > UInt64(maxBytes)
+            ? ((try? handle.read(upToCount: maxBytes)) ?? Data())
+            : ((try? handle.readToEnd()) ?? Data())
+        let text = String(decoding: data, as: UTF8.self)
+
+        var total = 0
+        for line in text.split(separator: "\n") {
+            guard let d = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let msg = obj["message"] as? [String: Any],
+                  let usage = msg["usage"] as? [String: Any] else { continue }
+            // Count fresh tokens only: input + output + cache writes. Cache *reads* are
+            // excluded because they re-count the same context on every turn, which would
+            // inflate the total into the tens of millions for a long session.
+            total += (usage["input_tokens"] as? Int ?? 0)
+            total += (usage["output_tokens"] as? Int ?? 0)
+            total += (usage["cache_creation_input_tokens"] as? Int ?? 0)
+        }
+        return total
+    }
+
     /// Reads only the last chunk of the file (transcripts can be large) and returns
     /// a human-readable activity line plus session metadata (branch, cwd, entrypoint)
     /// from the most recent entries that carry each field.

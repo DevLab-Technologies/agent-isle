@@ -60,9 +60,19 @@ struct SessionRow: View {
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 3) {
                 StatusPill(status: session.status)
-                Text(session.elapsedText)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
+                HStack(spacing: 5) {
+                    if let tok = session.tokenText {
+                        HStack(spacing: 2) {
+                            Image(systemName: "circle.hexagongrid.fill")
+                                .font(.system(size: 7))
+                            Text(tok)
+                        }
+                        .foregroundStyle(.white.opacity(0.4))
+                    }
+                    Text(session.elapsedText)
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .font(.system(size: 9, design: .monospaced))
             }
         }
         .contentShape(Rectangle())

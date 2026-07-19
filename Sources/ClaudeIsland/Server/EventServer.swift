@@ -96,16 +96,33 @@ final class EventServer {
                                             diffAdded: event.added ?? 0,
                                             diffRemoved: event.removed ?? 0)
             request.previewLines = (event.diff ?? []).map { $0.toDiffLine() }
-            store.upsert(sessionFor(id: sessionID, agent: agent, event: event,
-                                    status: .waiting, permission: request))
+            // Attach to the session the scanner already tracks, if present, so we
+            // decorate the existing row instead of creating a duplicate.
+            if store.sessions.contains(where: { $0.id == sessionID }) {
+                store.update(id: sessionID) { s in
+                    s.status = .waiting
+                    s.permission = request
+                    if let m = event.message { s.lastMessage = m }
+                }
+            } else {
+                store.upsert(sessionFor(id: sessionID, agent: agent, event: event,
+                                        status: .waiting, permission: request))
+            }
             SoundPlayer.shared.play(.attention)
             pending[sessionID] = (conn, "permission")   // hold the connection open
 
         case "question":
             let q = AgentQuestion(prompt: event.prompt ?? "Choose an option",
                                   options: event.options ?? ["Yes", "No"])
-            store.upsert(sessionFor(id: sessionID, agent: agent, event: event,
-                                    status: .asking, question: q))
+            if store.sessions.contains(where: { $0.id == sessionID }) {
+                store.update(id: sessionID) { s in
+                    s.status = .asking
+                    s.question = q
+                }
+            } else {
+                store.upsert(sessionFor(id: sessionID, agent: agent, event: event,
+                                        status: .asking, question: q))
+            }
             SoundPlayer.shared.play(.attention)
             pending[sessionID] = (conn, "question")
 

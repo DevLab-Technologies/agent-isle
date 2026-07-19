@@ -12,9 +12,18 @@ struct IslandRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             island
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: IslandSizeKey.self, value: proxy.size)
+                    }
+                )
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onPreferenceChange(IslandSizeKey.self) { size in
+            // Report the rendered island size so the window can shrink to fit it.
+            if size.width > 1, size.height > 1 { store.islandSize = size }
+        }
         .animation(.spring(response: 0.42, dampingFraction: 0.78), value: expanded)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.orderedSessions.map(\.id))
     }
@@ -40,6 +49,15 @@ struct IslandRootView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+/// Propagates the rendered island size up to the window so it can shrink to fit.
+struct IslandSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next.width > value.width || next.height > value.height { value = next }
     }
 }
 
