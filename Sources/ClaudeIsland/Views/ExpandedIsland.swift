@@ -112,13 +112,12 @@ struct ExpandedIsland: View {
         }
     }
 
-    // Footer tabs: the first three filter the list; Jump focuses the top session's app.
+    // Footer tabs filter the list. (Click a session row to jump to its terminal/IDE.)
     private var footer: some View {
         HStack(spacing: 0) {
             footerTab("Monitor", filter: .all)
             footerTab("Approve", filter: .approve, badge: store.sessions.filter { $0.status == .waiting }.count)
             footerTab("Ask", filter: .ask, badge: store.sessions.filter { $0.status == .asking }.count)
-            jumpButton
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -153,23 +152,6 @@ struct ExpandedIsland: View {
                             lineWidth: 0.5)
             )
             .padding(.horizontal, 2)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var jumpButton: some View {
-        Button {
-            if let s = store.visibleSessions.first ?? store.focusSession {
-                Jumper.jump(to: s)
-            }
-        } label: {
-            Text("Jump")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.7))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-                .padding(.horizontal, 2)
         }
         .buttonStyle(.plain)
     }

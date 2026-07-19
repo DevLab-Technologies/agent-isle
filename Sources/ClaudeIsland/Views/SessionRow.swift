@@ -77,7 +77,9 @@ struct SessionRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            // Click a session to jump to its terminal / IDE.
             if session.status == .done { store.acknowledge(sessionID: session.id) }
+            Jumper.jump(to: session)
         }
     }
 }
