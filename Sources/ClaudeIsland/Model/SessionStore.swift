@@ -16,6 +16,9 @@ final class SessionStore: ObservableObject {
     /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.
     @Published var islandSize: CGSize = CGSize(width: 520, height: 64)
 
+    /// Which sessions the expanded list shows (the footer tabs).
+    @Published var filter: SessionFilter = .all
+
     private var demoTimer: Timer?
 
     // MARK: - Derived state
@@ -28,6 +31,11 @@ final class SessionStore: ObservableObject {
             }
             return a.updatedAt > b.updatedAt
         }
+    }
+
+    /// Sessions shown in the list, honoring the current footer filter.
+    var visibleSessions: [AgentSession] {
+        orderedSessions.filter { filter.matches($0) }
     }
 
     /// The session the collapsed island should surface first.

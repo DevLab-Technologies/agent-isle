@@ -87,8 +87,16 @@ struct ExpandedIsland: View {
     private var sessionList: some View {
         ScrollView {
             VStack(spacing: 8) {
-                ForEach(store.orderedSessions) { session in
-                    SessionRow(session: session)
+                if store.visibleSessions.isEmpty {
+                    Text(emptyMessage)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                } else {
+                    ForEach(store.visibleSessions) { session in
+                        SessionRow(session: session)
+                    }
                 }
             }
             .padding(12)
@@ -96,28 +104,80 @@ struct ExpandedIsland: View {
         .frame(maxHeight: 340)
     }
 
+    private var emptyMessage: String {
+        switch store.filter {
+        case .all: return "No active sessions"
+        case .approve: return "Nothing waiting for approval"
+        case .ask: return "No open questions"
+        }
+    }
+
+    // Footer tabs: the first three filter the list; Jump focuses the top session's app.
     private var footer: some View {
         HStack(spacing: 0) {
-            footerButton("Monitor", active: true)
-            footerButton("Approve")
-            footerButton("Ask")
-            footerButton("Jump")
+            footerTab("Monitor", filter: .all)
+            footerTab("Approve", filter: .approve, badge: store.sessions.filter { $0.status == .waiting }.count)
+            footerTab("Ask", filter: .ask, badge: store.sessions.filter { $0.status == .asking }.count)
+            jumpButton
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
     }
 
-    private func footerButton(_ title: String, active: Bool = false) -> some View {
-        Text(title)
+    private func footerTab(_ title: String, filter: SessionFilter, badge: Int = 0) -> some View {
+        let active = isActive(filter)
+        return Button {
+            store.filter = filter
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                if badge > 0 {
+                    Text("\(badge)")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Capsule().fill(SessionStatus.waiting.color))
+                }
+            }
             .font(.system(size: 10, weight: .medium, design: .monospaced))
             .foregroundStyle(active ? SessionStatus.done.color : .white.opacity(0.45))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8)
+                    .fill(active ? SessionStatus.done.color.opacity(0.12) : .clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
                     .stroke(active ? SessionStatus.done.color.opacity(0.5) : Color.white.opacity(0.08),
                             lineWidth: 0.5)
             )
             .padding(.horizontal, 2)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var jumpButton: some View {
+        Button {
+            if let s = store.visibleSessions.first ?? store.focusSession {
+                Jumper.jump(to: s)
+            }
+        } label: {
+            Text("Jump")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+                .padding(.horizontal, 2)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func isActive(_ f: SessionFilter) -> Bool {
+        switch (store.filter, f) {
+        case (.all, .all), (.approve, .approve), (.ask, .ask): return true
+        default: return false
+        }
     }
 }

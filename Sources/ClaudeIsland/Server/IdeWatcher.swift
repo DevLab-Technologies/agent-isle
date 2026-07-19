@@ -82,6 +82,7 @@ final class IdeWatcher {
                     s.terminal = terminal
                     s.lastMessage = activity.text
                     s.tokens = tokens
+                    s.workspacePath = activity.cwd
                     // Don't override a pending permission/question or its waiting status.
                     if s.permission == nil && s.question == nil {
                         s.status = working ? .working : .idle
@@ -98,7 +99,8 @@ final class IdeWatcher {
                     status: working ? .working : .idle,
                     startedAt: (try? c.url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? c.mtime,
                     updatedAt: c.mtime,
-                    tokens: tokens))
+                    tokens: tokens,
+                    workspacePath: activity.cwd))
             }
         }
         pruneMissing(current: found)

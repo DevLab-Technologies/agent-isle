@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// The footer tabs that filter the session list.
+enum SessionFilter {
+    case all        // Monitor — everything
+    case approve    // Approve — sessions waiting on a permission
+    case ask        // Ask — sessions asking a question
+
+    func matches(_ s: AgentSession) -> Bool {
+        switch self {
+        case .all: return true
+        case .approve: return s.status == .waiting
+        case .ask: return s.status == .asking
+        }
+    }
+}
+
 /// Shared UI colors used outside the status enum.
 enum Palette {
     static let deny = Color(red: 0.95, green: 0.42, blue: 0.42)
@@ -159,6 +174,7 @@ struct AgentSession: Identifiable, Equatable {
     var permission: PermissionRequest?
     var question: AgentQuestion?
     var tokens: Int             // total tokens used this session (0 if unknown)
+    var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
 
     init(id: UUID = UUID(),
          agent: AgentKind,
@@ -170,7 +186,9 @@ struct AgentSession: Identifiable, Equatable {
          updatedAt: Date = Date(),
          permission: PermissionRequest? = nil,
          question: AgentQuestion? = nil,
-         tokens: Int = 0) {
+         tokens: Int = 0,
+         workspacePath: String? = nil) {
+        self.workspacePath = workspacePath
         self.id = id
         self.agent = agent
         self.title = title
