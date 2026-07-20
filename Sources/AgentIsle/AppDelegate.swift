@@ -26,11 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         EventServer.shared = EventServer(store: store)
         EventServer.shared?.start()
 
-        // Fill the island with demo data until real sessions arrive.
-        store.startDemo()
-
-        // Discover running IDE (VS Code / Cursor) Claude Code sessions — no hooks needed.
-        // Its first scan replaces the demo data if real sessions are found.
+        // Discover real sessions (local Claude Code + Grok/Copilot). No demo data by
+        // default — a fresh install should never show fake sessions. Demo is opt-in
+        // from the gear menu.
         ideWatcher = IdeWatcher(store: store)
         ideWatcher?.start()
 

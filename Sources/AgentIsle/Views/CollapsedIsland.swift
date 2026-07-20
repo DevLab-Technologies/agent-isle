@@ -60,11 +60,13 @@ struct CollapsedIsland: View {
             } else if store.workingCount > 0 {
                 WorkingIndicator()
             }
-            Text("\(store.sessions.count)")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Capsule().fill(Color.white.opacity(0.08)))
+            if !store.sessions.isEmpty {
+                Text("\(store.sessions.count)")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+            }
         }
     }
 }

@@ -51,6 +51,13 @@ struct SessionRow: View {
                     Text(session.terminal)
                         .font(.system(size: 9))
                         .foregroundStyle(.white.opacity(0.4))
+                    if store.demoMode {
+                        Text("DEMO")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.white.opacity(0.1)))
+                    }
                 }
                 Text(session.lastMessage)
                     .font(.system(size: 10, design: .monospaced))

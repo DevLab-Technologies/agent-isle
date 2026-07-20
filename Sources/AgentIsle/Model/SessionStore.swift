@@ -10,7 +10,7 @@ import Combine
 final class SessionStore: ObservableObject {
     @Published private(set) var sessions: [AgentSession] = []
     @Published var isExpanded: Bool = false
-    @Published var demoMode: Bool = true
+    @Published var demoMode: Bool = false
 
     /// Current rendered size of the island, reported by SwiftUI so the window can
     /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.

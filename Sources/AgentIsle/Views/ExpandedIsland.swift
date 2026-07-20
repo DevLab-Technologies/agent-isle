@@ -95,12 +95,14 @@ struct ExpandedIsland: View {
     private var sessionList: some View {
         ScrollView {
             VStack(spacing: 8) {
-                if store.visibleSessions.isEmpty {
+                if store.sessions.isEmpty {
+                    welcomeState
+                } else if store.visibleSessions.isEmpty {
                     Text(emptyMessage)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.35))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
+                        .padding(.vertical, 28)
                 } else {
                     ForEach(store.visibleSessions) { session in
                         SessionRow(session: session)
@@ -110,6 +112,27 @@ struct ExpandedIsland: View {
             .padding(12)
         }
         .frame(maxHeight: 340)
+    }
+
+    /// Shown on a fresh install when nothing is running yet.
+    private var welcomeState: some View {
+        VStack(spacing: 10) {
+            AppMark(size: 26)
+            Text("Waiting for agents")
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+            Text("Start a Claude Code, Grok, or Copilot\nsession and it'll appear here.")
+                .font(.system(size: 11, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white.opacity(0.4))
+            Button("Try demo mode") { store.startDemo() }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(SessionStatus.done.color)
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 34)
     }
 
     private var emptyMessage: String {
