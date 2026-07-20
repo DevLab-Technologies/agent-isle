@@ -120,6 +120,8 @@ final class SessionStore: ObservableObject {
         demoMode = false
         demoTimer?.invalidate()
         demoTimer = nil
+        // Remove the demo sessions; the watcher repopulates real ones on its next tick.
+        clearAll()
     }
 
     private var demoStep = 0
