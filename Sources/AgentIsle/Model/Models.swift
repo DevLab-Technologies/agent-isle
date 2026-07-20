@@ -169,6 +169,26 @@ struct AgentQuestion: Equatable {
     var options: [String]
 }
 
+/// One piece of a chat message, rendered as its own block in the transcript view.
+enum ChatBlock: Equatable {
+    case text(String)
+    case thinking(String)
+    case toolUse(name: String, detail: String?)
+    case toolResult(String)
+}
+
+/// A single turn in a session's conversation, parsed from the transcript.
+struct ChatMessage: Identifiable, Equatable {
+    enum Role { case user, assistant }
+    let id: String          // transcript entry uuid (stable across re-reads)
+    var role: Role
+    var blocks: [ChatBlock]
+    var timestamp: Date?
+
+    /// True when the message carries no visible content (e.g. an empty turn).
+    var isEmpty: Bool { blocks.isEmpty }
+}
+
 /// One monitored agent session.
 struct AgentSession: Identifiable, Equatable {
     let id: UUID
@@ -184,6 +204,7 @@ struct AgentSession: Identifiable, Equatable {
     var tokens: Int             // total tokens used this session (0 if unknown)
     var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
     var terminalBundleID: String?  // real host app bundle id (from the hook's TERM_PROGRAM)
+    var transcriptURL: URL?     // Claude Code jsonl transcript, for the live chat view
 
     init(id: UUID = UUID(),
          agent: AgentKind,
@@ -197,9 +218,11 @@ struct AgentSession: Identifiable, Equatable {
          question: AgentQuestion? = nil,
          tokens: Int = 0,
          workspacePath: String? = nil,
-         terminalBundleID: String? = nil) {
+         terminalBundleID: String? = nil,
+         transcriptURL: URL? = nil) {
         self.workspacePath = workspacePath
         self.terminalBundleID = terminalBundleID
+        self.transcriptURL = transcriptURL
         self.id = id
         self.agent = agent
         self.title = title

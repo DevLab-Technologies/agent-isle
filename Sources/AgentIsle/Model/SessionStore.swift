@@ -26,6 +26,32 @@ final class SessionStore: ObservableObject {
     /// Which sessions the expanded list shows (the footer tabs).
     @Published var filter: SessionFilter = .all
 
+    // MARK: - Live chat
+
+    /// The session whose full conversation is currently open, or nil for the list view.
+    @Published var openedSessionID: UUID?
+    /// Parsed messages for the open session, kept live by the tailer.
+    @Published var openedMessages: [ChatMessage] = []
+    /// True while the first read of an opened transcript is in flight.
+    @Published var chatLoading: Bool = false
+    /// Transient error surfaced after a failed send (e.g. missing permission).
+    @Published var sendError: String?
+
+    /// While a chat is open the panel stays pinned (won't auto-collapse on hover-out).
+    var isPinned: Bool { openedSessionID != nil }
+
+    var openedSession: AgentSession? {
+        guard let id = openedSessionID else { return nil }
+        return sessions.first { $0.id == id }
+    }
+
+    private lazy var tailer = TranscriptTailer { [weak self] msgs in
+        self?.openedMessages = msgs
+        self?.chatLoading = false
+    }
+    /// Transcript currently being tailed, so we only (re)start when it actually changes.
+    private var tailedURL: URL?
+
     private var demoTimer: Timer?
 
     // MARK: - Derived state
@@ -89,14 +115,69 @@ final class SessionStore: ObservableObject {
         transform(&s)
         s.updatedAt = Date()
         sessions[idx] = s
+        // If the open session just gained (or changed) its transcript, start tailing it —
+        // a hook-created row may appear before the watcher fills in the transcript path.
+        if id == openedSessionID { ensureTailing(s) }
     }
 
     func remove(id: UUID) {
         sessions.removeAll { $0.id == id }
+        if id == openedSessionID { closeChat() }
     }
 
     func clearAll() {
         sessions.removeAll()
+        if openedSessionID != nil { closeChat() }
+    }
+
+    // MARK: - Chat open/close
+
+    /// Open a session's full conversation and start tailing its transcript live.
+    func openChat(_ session: AgentSession) {
+        if session.status == .done { acknowledge(sessionID: session.id) }
+        openedSessionID = session.id
+        // No need to touch isExpanded: a chat is only opened from the already-expanded
+        // list, and `isPinned` keeps the panel open while it's up. Setting isExpanded
+        // here would stick it open and defeat hover-driven auto-collapse after closing.
+        openedMessages = []
+        chatLoading = false
+        sendError = nil
+        tailedURL = nil
+        ensureTailing(session)   // flips chatLoading back on if there's a transcript to read
+    }
+
+    func closeChat() {
+        tailer.stop()
+        openedSessionID = nil
+        openedMessages = []
+        chatLoading = false
+        sendError = nil
+        tailedURL = nil
+    }
+
+    /// Start (or switch) the tailer if the session has a transcript we aren't already
+    /// following. Sessions without a transcript (e.g. external agents) show a notice.
+    private func ensureTailing(_ session: AgentSession) {
+        guard let url = session.transcriptURL, url != tailedURL else { return }
+        tailedURL = url
+        chatLoading = true
+        tailer.start(url: url)
+    }
+
+    /// Deliver a typed message into the session's terminal.
+    func sendMessage(_ text: String, to session: AgentSession) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        sendError = nil
+        MessageSender.send(trimmed, to: session) { [weak self] result in
+            switch result {
+            case .success:
+                SoundPlayer.shared.play(.select)
+            case .failure(let error):
+                self?.sendError = error.userMessage
+                SoundPlayer.shared.play(.deny)
+            }
+        }
     }
 
     // MARK: - Permission decisions

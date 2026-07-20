@@ -12,8 +12,12 @@ struct ExpandedIsland: View {
         VStack(spacing: 0) {
             notchBar           // occupies the physical-notch band; content only in the ears
             Divider().overlay(Color.white.opacity(0.06))
-            sessionList
-            footer
+            if let session = store.openedSession {
+                SessionChatView(session: session)
+            } else {
+                sessionList
+                footer
+            }
         }
         .frame(width: panelWidth)
         .background(
