@@ -62,9 +62,12 @@ enum MessageSender {
     }
 
     private static func terminalScript(_ text: String) -> String {
+        // `front window` errors if Terminal has no open window — surface a clear reason
+        // instead of the raw AppleScript error.
         """
         tell application id "\(terminal)"
             activate
+            if (count of windows) is 0 then error "no open Terminal window for this session"
             do script "\(escape(text))" in front window
         end tell
         """

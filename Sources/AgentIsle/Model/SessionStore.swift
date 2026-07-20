@@ -138,9 +138,10 @@ final class SessionStore: ObservableObject {
         openedSessionID = session.id
         isExpanded = true
         openedMessages = []
+        chatLoading = false
         sendError = nil
         tailedURL = nil
-        ensureTailing(session)
+        ensureTailing(session)   // flips chatLoading back on if there's a transcript to read
     }
 
     func closeChat() {
