@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         // Check GitHub for a newer release and prompt / auto-install.
+        Updater.shared.store = store
         Updater.shared.start()
     }
 

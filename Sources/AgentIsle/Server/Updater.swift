@@ -25,6 +25,9 @@ final class Updater: ObservableObject {
     private var timer: Timer?
     private var isRunning = false   // guards against overlapping checks/dialogs
 
+    /// Session store, used to avoid auto-installing while the notch is mid-approval.
+    weak var store: SessionStore?
+
     /// User setting: install updates automatically instead of prompting.
     var autoInstall: Bool {
         get { UserDefaults.standard.bool(forKey: autoInstallKey) }
@@ -84,6 +87,9 @@ final class Updater: ObservableObject {
         if !userInitiated, release.version == skippedVersion { return }
 
         if autoInstall {
+            // Don't yank the app out from under a pending approval on a background
+            // check — retry on the next tick. A manual check installs immediately.
+            if !userInitiated, (store?.attentionCount ?? 0) > 0 { return }
             await downloadAndInstall(release)
         } else {
             promptForUpdate(release)
@@ -152,12 +158,14 @@ final class Updater: ObservableObject {
             }
             return
         }
+        var workDir: URL?
         do {
             let (tmp, resp) = try await URLSession.shared.download(from: release.assetURL)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError.unpackFailed }
 
             let work = fm.temporaryDirectory
                 .appendingPathComponent("agent-isle-update-\(UUID().uuidString)")
+            workDir = work
             try fm.createDirectory(at: work, withIntermediateDirectories: true)
             let zipURL = work.appendingPathComponent("Agent-Isle.zip")
             try fm.moveItem(at: tmp, to: zipURL)
@@ -170,9 +178,11 @@ final class Updater: ObservableObject {
 
             // Hand the swap+relaunch to a detached helper: it waits for us to quit,
             // replaces the bundle (with rollback on failure), then reopens the app.
+            // The helper reads from workDir after we exit, so we don't remove it here.
             try Self.installAndRelaunch(newApp: newApp, dest: Bundle.main.bundleURL)
             NSApp.terminate(nil)
         } catch {
+            if let workDir { try? fm.removeItem(at: workDir) }
             NSLog("Updater install failed: \(error)")
             let choseOpen = showInfo("Couldn't install the update automatically",
                                      "You can download it manually from the releases page.",
