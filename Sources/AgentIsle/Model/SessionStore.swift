@@ -136,7 +136,9 @@ final class SessionStore: ObservableObject {
     func openChat(_ session: AgentSession) {
         if session.status == .done { acknowledge(sessionID: session.id) }
         openedSessionID = session.id
-        isExpanded = true
+        // No need to touch isExpanded: a chat is only opened from the already-expanded
+        // list, and `isPinned` keeps the panel open while it's up. Setting isExpanded
+        // here would stick it open and defeat hover-driven auto-collapse after closing.
         openedMessages = []
         chatLoading = false
         sendError = nil
