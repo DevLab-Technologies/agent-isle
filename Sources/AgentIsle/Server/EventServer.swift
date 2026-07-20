@@ -18,8 +18,8 @@ final class EventServer {
     private let store: SessionStore
     private var listener: NWListener?
 
-    /// Connections waiting on a user decision, keyed by session id.
-    private var pending: [UUID: (connection: NWConnection, kind: String)] = [:]
+    /// Hook connections held open while waiting on a user decision, keyed by session id.
+    private var pending: [UUID: NWConnection] = [:]
 
     init(store: SessionStore) {
         self.store = store
@@ -29,7 +29,17 @@ final class EventServer {
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
-            let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: EventServer.port)!)
+            // Bind to loopback only. Hooks connect via localhost, and without this the
+            // listener would accept events from any host on the network — letting a LAN peer
+            // inject or remove sessions and gate tools. `requiredLocalEndpoint` pins the
+            // bind to 127.0.0.1 (verified via lsof); `requiredInterfaceType = .loopback`
+            // was tried but still binds all interfaces, so it isn't a real restriction.
+            // A hook that resolves `localhost` to IPv6 ::1 first simply falls back to the
+            // IPv4 address. The port lives in the endpoint, so it must NOT also be passed
+            // via `on:` (that double-binds and fails the listener).
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1",
+                                                               port: NWEndpoint.Port(rawValue: EventServer.port)!)
+            let listener = try NWListener(using: params)
             listener.stateUpdateHandler = { state in
                 if case .failed(let error) = state {
                     NSLog("EventServer failed: \(error)")
@@ -111,7 +121,7 @@ final class EventServer {
                                         status: .waiting, permission: request))
             }
             SoundPlayer.shared.play(.attention)
-            pending[sessionID] = (conn, "permission")   // hold the connection open
+            park(conn, sessionID: sessionID)
 
         case "question":
             let q = AgentQuestion(prompt: event.prompt ?? "Choose an option",
@@ -126,14 +136,19 @@ final class EventServer {
                                         status: .asking, question: q))
             }
             SoundPlayer.shared.play(.attention)
-            pending[sessionID] = (conn, "question")
+            park(conn, sessionID: sessionID)
 
         case "done":
+            // The session ended: any prompt it was blocked on is moot. Unpark the old
+            // hook, then drop the card so a finished session never keeps "asking".
+            unpark(sessionID)
             upsertSession(id: sessionID, agent: agent, event: event, status: .done)
+            store.update(id: sessionID) { $0.permission = nil; $0.question = nil }
             SoundPlayer.shared.play(.done)
             respond(on: conn, json: #"{"ok":true}"#)
 
         case "remove":
+            unpark(sessionID)
             store.remove(id: sessionID)
             respond(on: conn, json: #"{"ok":true}"#)
 
@@ -172,11 +187,59 @@ final class EventServer {
                      terminalBundleID: event.term_bundle)
     }
 
-    // MARK: - Replies back to a blocked hook
+    // MARK: - Parking / replies for a blocked hook
+
+    /// Hold a hook's connection open until the user decides, and watch for the hook
+    /// giving up. The `PreToolUse` hook blocks with a timeout (and dies outright if its
+    /// terminal closes); either way the socket closes before we reply. Without noticing
+    /// that, the permission/question card would linger on a session that's long gone —
+    /// exactly the "stale prompt" case. When the connection ends first, drop the card.
+    private func park(_ conn: NWConnection, sessionID: UUID) {
+        // A fresh prompt supersedes any still-parked one for the same session.
+        pending[sessionID]?.cancel()
+        pending[sessionID] = conn
+        conn.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled:
+                guard let self else { return }
+                Task { @MainActor in self.abandon(sessionID: sessionID, conn: conn) }
+            default:
+                break
+            }
+        }
+        // A parked hook sends nothing more, so a further read completes only on EOF —
+        // i.e. when the client disconnects. That's our signal the request was abandoned.
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 1) { [weak self] _, _, isComplete, error in
+            guard isComplete || error != nil, let self else { return }
+            Task { @MainActor in self.abandon(sessionID: sessionID, conn: conn) }
+        }
+    }
+
+    /// Clear an abandoned prompt, but only if `conn` is still the parked one — a normal
+    /// `reply()` removes it from `pending` first, so the close it triggers is a no-op here.
+    private func abandon(sessionID: UUID, conn: NWConnection) {
+        guard let parked = pending[sessionID], parked === conn else { return }
+        pending.removeValue(forKey: sessionID)
+        conn.cancel()
+        // Drop whichever prompt is still set — the card renders on `permission`/`question`
+        // being non-nil regardless of status, so clearing must not depend on the status
+        // still being .waiting/.asking (a stray status event may have moved it on).
+        store.update(id: sessionID) { s in
+            let wasPending = s.status == .waiting || s.status == .asking
+            if s.permission != nil { s.permission = nil; s.lastMessage = "Permission expired" }
+            if s.question != nil   { s.question = nil;   s.lastMessage = "Question expired" }
+            if wasPending { s.status = .idle }
+        }
+    }
+
+    /// Drop a parked connection without a decision (the session ended or was removed).
+    private func unpark(_ sessionID: UUID) {
+        pending.removeValue(forKey: sessionID)?.cancel()
+    }
 
     /// Called by the store when the user decides; unblocks the parked connection.
     func reply(sessionID: UUID, decision: String) {
-        guard let (conn, _) = pending.removeValue(forKey: sessionID) else { return }
+        guard let conn = pending.removeValue(forKey: sessionID) else { return }
         let json = "{\"ok\":true,\"decision\":\"\(decision)\"}"
         respond(on: conn, json: json)
     }
