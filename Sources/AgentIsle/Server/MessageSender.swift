@@ -48,9 +48,11 @@ enum MessageSender {
 
     // MARK: - AppleScript paths
 
+    // Target by bundle id, not name — iTerm's AppleScript name varies across installs
+    // ("iTerm" vs "iTerm2"), whereas the bundle id is stable.
     private static func itermScript(_ text: String) -> String {
         """
-        tell application "iTerm2"
+        tell application id "\(iterm)"
             activate
             tell current window
                 tell current session to write text "\(escape(text))"
@@ -61,7 +63,7 @@ enum MessageSender {
 
     private static func terminalScript(_ text: String) -> String {
         """
-        tell application "Terminal"
+        tell application id "\(terminal)"
             activate
             do script "\(escape(text))" in front window
         end tell
@@ -112,16 +114,38 @@ enum MessageSender {
         return false
     }
 
+    /// Maximum UTF-16 units per synthesized event. A single event carrying a long
+    /// unicode string is delivered unreliably — many apps drop everything past a small
+    /// buffer — so the text is posted in small chunks split on grapheme boundaries.
+    private static let maxChunkUnits = 16
+
     private static func typeString(_ text: String) {
         let source = CGEventSource(stateID: .combinedSessionState)
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) else { return }
-        var utf16 = Array(text.utf16)
-        event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-        event.post(tap: .cghidEventTap)
-        if let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
-            up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-            up.post(tap: .cghidEventTap)
+        var buffer: [Character] = []
+        var units = 0
+
+        func flush() {
+            guard !buffer.isEmpty else { return }
+            var utf16 = Array(String(buffer).utf16)
+            if let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
+                down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+                down.post(tap: .cghidEventTap)
+            }
+            if let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
+                up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+                up.post(tap: .cghidEventTap)
+            }
+            buffer.removeAll(keepingCapacity: true)
+            units = 0
         }
+
+        for ch in text {
+            let n = ch.utf16.count
+            if units + n > maxChunkUnits { flush() }   // never split a grapheme across events
+            buffer.append(ch)
+            units += n
+        }
+        flush()
     }
 
     private static func pressReturn() {
