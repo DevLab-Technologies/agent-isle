@@ -80,6 +80,11 @@ struct ExpandedIsland: View {
                 }
             }
             Divider()
+            Button("Check for Updates…") { Updater.shared.checkForUpdates(userInitiated: true) }
+            Toggle("Automatically Install Updates", isOn: Binding(
+                get: { Updater.shared.autoInstall },
+                set: { Updater.shared.autoInstall = $0 }))
+            Divider()
             Button("Quit Agent Isle") { NSApp.terminate(nil) }
         } label: {
             Image(systemName: "gearshape.fill")

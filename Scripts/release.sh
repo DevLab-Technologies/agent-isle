@@ -9,6 +9,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Marketing version baked into the bundle; the in-app updater compares this against
+# the latest GitHub release tag. Bump it for every release: ./release.sh 1.2
+VERSION="${1:-1.1}"
+echo "▸ Version: $VERSION"
+
 echo "▸ Building universal release binary…"
 swift build -c release --arch arm64 --arch x86_64
 
@@ -22,7 +27,7 @@ cp "$BIN" "$CONTENTS/MacOS/AgentIsle"
 cp "$ROOT/Sources/AgentIsle/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 cp "$ROOT/Scripts/agent-isle-hook.py" "$CONTENTS/Resources/agent-isle-hook.py"
 
-cat > "$CONTENTS/Info.plist" <<'PLIST'
+cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -32,8 +37,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>com.devlab.agentisle</string>
   <key>CFBundleExecutable</key><string>AgentIsle</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleVersion</key><string>1.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
@@ -42,31 +47,46 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Notarized signing is used when signing credentials are present in the environment;
-# otherwise we fall back to an ad-hoc signature (works for friends, shows a warning).
-#
-#   export SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-#   export APPLE_ID="you@example.com"
-#   export TEAM_ID="TEAMID"
-#   export APPLE_PASSWORD="app-specific-password"   # appleid.apple.com -> App-Specific Passwords
-#
-NOTARIZED=0
+# --- Code signing ------------------------------------------------------------
+# Signs with a Developer ID Application certificate (hardened runtime, so the build
+# is notarizable). If SIGN_IDENTITY isn't set we auto-detect the first Developer ID
+# cert in the keychain; with no cert at all we fall back to an ad-hoc signature
+# (unsigned — Gatekeeper will warn).
+if [[ -z "${SIGN_IDENTITY:-}" ]]; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning \
+                   | awk -F'"' '/Developer ID Application/{print $2; exit}')"
+fi
+
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
-  echo "▸ Code-signing with Developer ID (hardened runtime)…"
+  echo "▸ Code-signing with: $SIGN_IDENTITY"
   codesign --force --deep --options runtime --timestamp \
            --sign "$SIGN_IDENTITY" "$APP"
 else
-  echo "▸ Ad-hoc code-signing (set SIGN_IDENTITY to notarize)…"
+  echo "▸ Ad-hoc code-signing (no Developer ID cert found)…"
   codesign --force --deep --sign - "$APP"
 fi
 
 echo "▸ Zipping…"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ROOT/dist/Agent-Isle.zip"
 
-if [[ -n "${SIGN_IDENTITY:-}" && -n "${APPLE_ID:-}" && -n "${TEAM_ID:-}" && -n "${APPLE_PASSWORD:-}" ]]; then
+# --- Notarization ------------------------------------------------------------
+# Prefers a stored notarytool keychain profile (no secrets in env). Set it up once:
+#   xcrun notarytool store-credentials "AgentIsle" \
+#     --apple-id you@example.com --team-id ZS3A435WC2 --password <app-specific-pw>
+# Override the profile name with NOTARY_PROFILE, or fall back to APPLE_ID /
+# TEAM_ID / APPLE_PASSWORD env vars if you prefer.
+NOTARY_PROFILE="${NOTARY_PROFILE:-AgentIsle}"
+NOTARIZED=0
+NOTARY_ARGS=()
+if xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+  NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+elif [[ -n "${APPLE_ID:-}" && -n "${TEAM_ID:-}" && -n "${APPLE_PASSWORD:-}" ]]; then
+  NOTARY_ARGS=(--apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_PASSWORD")
+fi
+
+if [[ -n "${SIGN_IDENTITY:-}" && ${#NOTARY_ARGS[@]} -gt 0 ]]; then
   echo "▸ Submitting to Apple notary service (this can take a few minutes)…"
-  xcrun notarytool submit "$ROOT/dist/Agent-Isle.zip" \
-        --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_PASSWORD" --wait
+  xcrun notarytool submit "$ROOT/dist/Agent-Isle.zip" "${NOTARY_ARGS[@]}" --wait
   echo "▸ Stapling ticket…"
   xcrun stapler staple "$APP"
   # Re-zip so the stapled ticket ships inside the archive.

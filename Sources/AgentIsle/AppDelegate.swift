@@ -2,11 +2,13 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let store = SessionStore()
     private var notchWindow: NotchWindow?
     private var statusItem: NSStatusItem?
     private var ideWatcher: IdeWatcher?
+    private var hookMenuItem: NSMenuItem?
+    private var autoUpdateMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -43,6 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.maybePromptForHooks()
         }
+
+        // Check GitHub for a newer release and prompt / auto-install.
+        Updater.shared.start()
     }
 
     /// Terminate other running copies of Agent Isle so only one owns the event port.
@@ -55,14 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private let optOutKey = "hookPromptOptOut"
-
-    /// Once per launch: if the user has Claude Code but no hooks and hasn't opted out,
-    /// offer to install them.
+    /// Every launch: if the user has Claude Code but our hooks aren't properly
+    /// installed, offer to install them. There's no permanent opt-out — we ask on
+    /// each launch until the hooks are in place, after which this stops firing on
+    /// its own (see `HookInstaller.isInstalled`).
     private func maybePromptForHooks() {
         guard HookInstaller.hasClaudeCode(),
-              !HookInstaller.isInstalled(),
-              !UserDefaults.standard.bool(forKey: optOutKey) else { return }
+              !HookInstaller.isInstalled() else { return }
 
         let alert = NSAlert()
         alert.messageText = "Enable Claude Code approvals?"
@@ -73,11 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         """
         alert.addButton(withTitle: "Install")
         alert.addButton(withTitle: "Not Now")
-        alert.addButton(withTitle: "Don't Ask Again")
 
         NSApp.activate(ignoringOtherApps: true)
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
+        if alert.runModal() == .alertFirstButtonReturn {
             let ok = HookInstaller.install()
             let done = NSAlert()
             done.messageText = ok ? "Hooks installed" : "Couldn't install hooks"
@@ -85,11 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ? "Restart any running Claude Code sessions for approvals to take effect."
                 : "See Console for details. You can retry from the gear menu."
             done.runModal()
-        case .alertThirdButtonReturn:
-            UserDefaults.standard.set(true, forKey: optOutKey)
-        default:
-            break   // Not Now — ask again next launch
         }
+        // Not Now — we'll ask again next launch.
     }
 
     private func setupStatusItem() {
@@ -117,12 +116,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installItem.target = self
         menu.addItem(installItem)
 
+        let hookItem = NSMenuItem(title: "Install Claude Code Hooks", action: #selector(toggleHooks), keyEquivalent: "")
+        hookItem.target = self
+        menu.addItem(hookItem)
+        hookMenuItem = hookItem
+
+        menu.addItem(.separator())
+
+        let checkUpdateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        checkUpdateItem.target = self
+        menu.addItem(checkUpdateItem)
+
+        let autoUpdateItem = NSMenuItem(title: "Automatically Install Updates", action: #selector(toggleAutoUpdate), keyEquivalent: "")
+        autoUpdateItem.target = self
+        menu.addItem(autoUpdateItem)
+        autoUpdateMenuItem = autoUpdateItem
+
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Agent Isle", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
+        menu.delegate = self
         item.menu = menu
         statusItem = item
+    }
+
+    /// Refresh state-dependent titles whenever the menu is about to open.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        hookMenuItem?.title = HookInstaller.isInstalled()
+            ? "Remove Claude Code Hooks"
+            : "Install Claude Code Hooks"
+        hookMenuItem?.isHidden = !HookInstaller.hasClaudeCode()
+        autoUpdateMenuItem?.state = Updater.shared.autoInstall ? .on : .off
+    }
+
+    @objc private func checkForUpdates() {
+        Updater.shared.checkForUpdates(userInitiated: true)
+    }
+
+    @objc private func toggleAutoUpdate(_ sender: NSMenuItem) {
+        Updater.shared.autoInstall.toggle()
+        sender.state = Updater.shared.autoInstall ? .on : .off
+    }
+
+    @objc private func toggleHooks() {
+        if HookInstaller.isInstalled() {
+            HookInstaller.uninstall()
+            return
+        }
+        let ok = HookInstaller.install()
+        let done = NSAlert()
+        done.messageText = ok ? "Hooks installed" : "Couldn't install hooks"
+        done.informativeText = ok
+            ? "Restart any running Claude Code sessions for approvals to take effect."
+            : "See Console for details."
+        done.runModal()
     }
 
     @objc private func toggleDemo(_ sender: NSMenuItem) {
