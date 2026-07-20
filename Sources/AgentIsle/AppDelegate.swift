@@ -11,6 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // Single instance: replace any older copy so they don't fight over the event
+        // server port (4711). A fresh launch wins.
+        terminateOtherInstances()
+
         // Floating island over the notch.
         let window = NotchWindow(store: store)
         window.orderFrontRegardless()
@@ -40,6 +44,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Offer to set up Claude Code approvals on launch (unless already done / opted out).
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.maybePromptForHooks()
+        }
+    }
+
+    /// Terminate other running copies of Agent Isle so only one owns the event port.
+    private func terminateOtherInstances() {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let me = NSRunningApplication.current.processIdentifier
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        where app.processIdentifier != me {
+            app.forceTerminate()
         }
     }
 
