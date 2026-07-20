@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClaudeIsland",
+    name: "AgentIsle",
     platforms: [
         .macOS(.v14)
     ],
     targets: [
         .executableTarget(
-            name: "ClaudeIsland",
-            path: "Sources/ClaudeIsland",
+            name: "AgentIsle",
+            path: "Sources/AgentIsle",
             exclude: ["Resources/icon_preview.png"],
             resources: [
                 .copy("Resources/AppIcon.icns")

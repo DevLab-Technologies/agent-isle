@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Generate AppIcon.icns for Claude Island — a dark squircle with a neon terminal
+"""Generate AppIcon.icns for Agent Isle — a dark squircle with a neon terminal
 prompt (`>_`), a vibecoding/synthwave glow aesthetic."""
 import os, math, subprocess
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "Sources", "ClaudeIsland", "Resources")
+OUT = os.path.join(ROOT, "Sources", "AgentIsle", "Resources")
 os.makedirs(OUT, exist_ok=True)
 
 S = 1024

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Produce a shareable Claude Island build:
+# Produce a shareable Agent Isle build:
 #   - universal binary (Apple Silicon + Intel)
 #   - wrapped in a .app bundle
 #   - ad-hoc code-signed (so it launches; not notarized — see README)
@@ -12,24 +12,24 @@ cd "$ROOT"
 echo "▸ Building universal release binary…"
 swift build -c release --arch arm64 --arch x86_64
 
-BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/ClaudeIsland"
-APP="$ROOT/dist/Claude Island.app"
+BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/AgentIsle"
+APP="$ROOT/dist/Agent Isle.app"
 CONTENTS="$APP/Contents"
 
 rm -rf "$ROOT/dist"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
-cp "$BIN" "$CONTENTS/MacOS/ClaudeIsland"
-cp "$ROOT/Sources/ClaudeIsland/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
+cp "$BIN" "$CONTENTS/MacOS/AgentIsle"
+cp "$ROOT/Sources/AgentIsle/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Claude Island</string>
-  <key>CFBundleDisplayName</key><string>Claude Island</string>
-  <key>CFBundleIdentifier</key><string>app.claudeisland.notch</string>
-  <key>CFBundleExecutable</key><string>ClaudeIsland</string>
+  <key>CFBundleName</key><string>Agent Isle</string>
+  <key>CFBundleDisplayName</key><string>Agent Isle</string>
+  <key>CFBundleIdentifier</key><string>com.devlab.agentisle</string>
+  <key>CFBundleExecutable</key><string>AgentIsle</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleVersion</key><string>1.0</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
@@ -75,7 +75,7 @@ if [[ -n "${SIGN_IDENTITY:-}" && -n "${APPLE_ID:-}" && -n "${TEAM_ID:-}" && -n "
 fi
 
 echo
-echo "✓ Universal binary: $(lipo -archs "$CONTENTS/MacOS/ClaudeIsland")"
+echo "✓ Universal binary: $(lipo -archs "$CONTENTS/MacOS/AgentIsle")"
 echo "✓ Shareable zip:    $ROOT/dist/Claude-Island.zip"
 if [[ "$NOTARIZED" == "1" ]]; then
   echo "✓ Notarized & stapled — friends can just double-click to open."
@@ -83,5 +83,5 @@ else
   echo
   echo "Not notarized. Tell your friend to run this once after unzipping"
   echo "(or right-click the app → Open the first time):"
-  echo "    xattr -dr com.apple.quarantine '/Applications/Claude Island.app'"
+  echo "    xattr -dr com.apple.quarantine '/Applications/Agent Isle.app'"
 fi

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Claude Code -> Claude Island bridge.
+Claude Code -> Agent Isle bridge.
 
 Configured as a Claude Code hook (see install-hooks.sh). Claude Code pipes a JSON
-payload on stdin for each hook event; this script translates it into a Claude Island
+payload on stdin for each hook event; this script translates it into a Agent Isle
 `/event` POST so the session shows up in the notch.
 
 For PreToolUse it BLOCKS on the island's decision and echoes the allow/deny back to
 Claude Code in the hook output format, so you can approve tools right from the notch.
 
-Usage:  vibe-hook.py <event-kind>
+Usage:  agent-isle-hook.py <event-kind>
         event-kind in: pretooluse | posttooluse | notification | stop | userprompt
 """
 import json
@@ -32,7 +32,7 @@ EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "Update"}
 def should_ask(mode, tool):
     """Mirror when Claude Code would actually prompt, so the island intercepts the
     same requests instead of prompting on every tool or on none."""
-    if os.environ.get("VIBE_APPROVALS") == "0":
+    if os.environ.get("AGENT_ISLE_APPROVALS") == "0":
         return False
     if mode == "bypassPermissions" or mode == "plan":
         return False
@@ -106,9 +106,9 @@ def main():
         hook = json.loads(raw)
     except Exception:
         hook = {}
-    if os.environ.get("VIBE_DEBUG") == "1":
+    if os.environ.get("AGENT_ISLE_DEBUG") == "1":
         try:
-            with open("/tmp/vibe-hook-debug.jsonl", "a") as _f:
+            with open("/tmp/agent-isle-hook-debug.jsonl", "a") as _f:
                 _f.write(kind + " " + raw + "\n")
         except Exception:
             pass
@@ -144,7 +144,7 @@ def main():
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "allow" if allow else "deny",
-                        "permissionDecisionReason": "Decided from Claude Island",
+                        "permissionDecisionReason": "Decided from Agent Isle",
                     }
                 }))
             else:
@@ -172,7 +172,7 @@ def main():
 
     except Exception as exc:
         # Never break the user's Claude Code session because the island is down.
-        sys.stderr.write(f"vibe-hook: {exc}\n")
+        sys.stderr.write(f"agent-isle-hook: {exc}\n")
 
     sys.exit(0)
 

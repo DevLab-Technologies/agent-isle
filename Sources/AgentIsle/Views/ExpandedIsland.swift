@@ -34,7 +34,7 @@ struct ExpandedIsland: View {
         HStack(spacing: 0) {
             HStack(spacing: 7) {
                 AppMark(size: 14)
-                Text("CLAUDE ISLAND")
+                Text("AGENT ISLE")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.2)
                     .foregroundStyle(.white.opacity(0.85))
@@ -72,7 +72,7 @@ struct ExpandedIsland: View {
                 store.demoMode ? store.stopDemo() : store.startDemo()
             }
             Divider()
-            Button("Quit Claude Island") { NSApp.terminate(nil) }
+            Button("Quit Agent Isle") { NSApp.terminate(nil) }
         } label: {
             Image(systemName: "gearshape.fill")
                 .font(.system(size: 11))

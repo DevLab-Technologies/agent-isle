@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Remove the Claude Island hooks from ~/.claude/settings.json.
+# Remove the Agent Isle hooks from ~/.claude/settings.json.
 # Monitoring keeps working without hooks (the app reads transcripts directly);
 # hooks are only needed for blocking permission approvals from the notch.
 set -euo pipefail
@@ -21,7 +21,7 @@ for event in list(hooks.keys()):
     kept = []
     for group in hooks[event]:
         cmds = group.get("hooks", [])
-        cmds = [c for c in cmds if "vibe-hook" not in c.get("command", "")]
+        cmds = [c for c in cmds if "agent-isle-hook" not in c.get("command", "")]
         if cmds:
             group["hooks"] = cmds
             kept.append(group)
@@ -40,7 +40,7 @@ else:
 with open(path, "w") as f:
     json.dump(settings, f, indent=2)
 
-print(f"Removed {removed} Claude Island hook group(s) from {path}")
+print(f"Removed {removed} Agent Isle hook group(s) from {path}")
 PY
 
 echo "Done. The island keeps monitoring sessions without hooks."
