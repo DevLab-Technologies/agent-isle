@@ -60,23 +60,23 @@ else
 fi
 
 echo "▸ Zipping…"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$ROOT/dist/Claude-Island.zip"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ROOT/dist/Agent-Isle.zip"
 
 if [[ -n "${SIGN_IDENTITY:-}" && -n "${APPLE_ID:-}" && -n "${TEAM_ID:-}" && -n "${APPLE_PASSWORD:-}" ]]; then
   echo "▸ Submitting to Apple notary service (this can take a few minutes)…"
-  xcrun notarytool submit "$ROOT/dist/Claude-Island.zip" \
+  xcrun notarytool submit "$ROOT/dist/Agent-Isle.zip" \
         --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_PASSWORD" --wait
   echo "▸ Stapling ticket…"
   xcrun stapler staple "$APP"
   # Re-zip so the stapled ticket ships inside the archive.
-  rm -f "$ROOT/dist/Claude-Island.zip"
-  ditto -c -k --sequesterRsrc --keepParent "$APP" "$ROOT/dist/Claude-Island.zip"
+  rm -f "$ROOT/dist/Agent-Isle.zip"
+  ditto -c -k --sequesterRsrc --keepParent "$APP" "$ROOT/dist/Agent-Isle.zip"
   NOTARIZED=1
 fi
 
 echo
 echo "✓ Universal binary: $(lipo -archs "$CONTENTS/MacOS/AgentIsle")"
-echo "✓ Shareable zip:    $ROOT/dist/Claude-Island.zip"
+echo "✓ Shareable zip:    $ROOT/dist/Agent-Isle.zip"
 if [[ "$NOTARIZED" == "1" ]]; then
   echo "✓ Notarized & stapled — friends can just double-click to open."
 else
