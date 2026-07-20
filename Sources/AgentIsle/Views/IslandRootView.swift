@@ -5,10 +5,8 @@ import SwiftUI
 struct IslandRootView: View {
     let geometry: NotchGeometry
     @EnvironmentObject var store: SessionStore
-    @State private var hovering = false
-    @State private var collapseTask: DispatchWorkItem?
 
-    private var expanded: Bool { store.isExpanded || hovering }
+    private var expanded: Bool { store.isExpanded || store.isHovering }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,20 +38,6 @@ struct IslandRootView: View {
             }
         }
         .contentShape(Rectangle())   // whole bounds hoverable, incl. the notch gap
-        .onHover { inside in
-            collapseTask?.cancel()
-            if inside {
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) { hovering = true }
-            } else {
-                // Delay collapse slightly so brief tracking drops near the notch
-                // don't cause flicker.
-                let task = DispatchWorkItem {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) { hovering = false }
-                }
-                collapseTask = task
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: task)
-            }
-        }
         .onTapGesture {
             withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) {
                 store.isExpanded.toggle()

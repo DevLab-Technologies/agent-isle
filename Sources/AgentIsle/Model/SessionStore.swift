@@ -12,6 +12,13 @@ final class SessionStore: ObservableObject {
     @Published var isExpanded: Bool = false
     @Published var demoMode: Bool = false
 
+    /// Whether the pointer is currently over the island. Driven by a window-level
+    /// `NSEvent` monitor (see `NotchWindow`) rather than SwiftUI's `.onHover`, whose
+    /// mouse-exit tracking is unreliable at the top screen edge and would leave the
+    /// island stuck open.
+    @Published private(set) var isHovering: Bool = false
+    private var hoverCollapseWork: DispatchWorkItem?
+
     /// Current rendered size of the island, reported by SwiftUI so the window can
     /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.
     @Published var islandSize: CGSize = CGSize(width: 520, height: 64)
@@ -49,6 +56,21 @@ final class SessionStore: ObservableObject {
 
     var workingCount: Int {
         sessions.filter { $0.status == .working }.count
+    }
+
+    /// Report whether the pointer is inside the island. Entry applies immediately;
+    /// exit is debounced slightly so brief tracking drops near the notch don't flicker.
+    func setHovering(_ inside: Bool) {
+        hoverCollapseWork?.cancel()
+        hoverCollapseWork = nil
+        if inside {
+            if !isHovering { isHovering = true }
+        } else {
+            guard isHovering else { return }
+            let work = DispatchWorkItem { [weak self] in self?.isHovering = false }
+            hoverCollapseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+        }
     }
 
     // MARK: - Mutation
