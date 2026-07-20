@@ -17,6 +17,7 @@ rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN" "$CONTENTS/MacOS/AgentIsle"
 cp "$ROOT/Sources/AgentIsle/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
+cp "$ROOT/Scripts/agent-isle-hook.py" "$CONTENTS/Resources/agent-isle-hook.py"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

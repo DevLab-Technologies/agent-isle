@@ -71,6 +71,14 @@ struct ExpandedIsland: View {
             Button(store.demoMode ? "Stop Demo Mode" : "Start Demo Mode") {
                 store.demoMode ? store.stopDemo() : store.startDemo()
             }
+            if HookInstaller.hasClaudeCode() {
+                Divider()
+                if HookInstaller.isInstalled() {
+                    Button("Remove Claude Code Hooks") { HookInstaller.uninstall() }
+                } else {
+                    Button("Install Claude Code Hooks…") { HookInstaller.install() }
+                }
+            }
             Divider()
             Button("Quit Agent Isle") { NSApp.terminate(nil) }
         } label: {

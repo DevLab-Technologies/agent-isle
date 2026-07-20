@@ -36,6 +36,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.notchWindow?.reposition() }
             }
+
+        // Offer to set up Claude Code approvals on launch (unless already done / opted out).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.maybePromptForHooks()
+        }
+    }
+
+    private let optOutKey = "hookPromptOptOut"
+
+    /// Once per launch: if the user has Claude Code but no hooks and hasn't opted out,
+    /// offer to install them.
+    private func maybePromptForHooks() {
+        guard HookInstaller.hasClaudeCode(),
+              !HookInstaller.isInstalled(),
+              !UserDefaults.standard.bool(forKey: optOutKey) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Enable Claude Code approvals?"
+        alert.informativeText = """
+        Agent Isle already monitors your sessions. To also approve permission \
+        requests right from the notch, it can add hooks to your Claude Code config \
+        (~/.claude/settings.json). You can remove them anytime from the gear menu.
+        """
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Not Now")
+        alert.addButton(withTitle: "Don't Ask Again")
+
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let ok = HookInstaller.install()
+            let done = NSAlert()
+            done.messageText = ok ? "Hooks installed" : "Couldn't install hooks"
+            done.informativeText = ok
+                ? "Restart any running Claude Code sessions for approvals to take effect."
+                : "See Console for details. You can retry from the gear menu."
+            done.runModal()
+        case .alertThirdButtonReturn:
+            UserDefaults.standard.set(true, forKey: optOutKey)
+        default:
+            break   // Not Now — ask again next launch
+        }
     }
 
     private func setupStatusItem() {
