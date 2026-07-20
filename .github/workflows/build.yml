@@ -1,0 +1,32 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: Build (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Package .app
+        run: bash Scripts/bundle.sh release
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Agent-Isle-app
+          path: build/Agent Isle.app
+          if-no-files-found: error

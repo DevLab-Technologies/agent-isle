@@ -1,5 +1,9 @@
 # Agent Isle
 
+[![build](https://github.com/DevLab-Technologies/agent-isle/actions/workflows/build.yml/badge.svg)](https://github.com/DevLab-Technologies/agent-isle/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
+![Platform: macOS 14+](https://img.shields.io/badge/Platform-macOS%2014%2B-lightgrey.svg)
+
 **A Dynamic Island for your coding agents.** Agent Isle is a native macOS app that
 lives in the notch and lets you monitor, approve, and jump back to your AI coding
 agents — Claude Code, Grok, Copilot and more — without leaving your flow.
