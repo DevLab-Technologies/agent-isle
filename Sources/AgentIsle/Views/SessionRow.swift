@@ -84,9 +84,8 @@ struct SessionRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            // Click a session to jump to its terminal / IDE.
-            if session.status == .done { store.acknowledge(sessionID: session.id) }
-            Jumper.jump(to: session)
+            // Click a session to open its live chat (jump lives inside the chat header).
+            store.openChat(session)
         }
     }
 }

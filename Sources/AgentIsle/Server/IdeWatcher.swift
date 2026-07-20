@@ -85,6 +85,7 @@ final class IdeWatcher {
                     s.lastMessage = activity.text
                     s.tokens = tokens
                     s.workspacePath = activity.cwd
+                    s.transcriptURL = c.url
                     // Don't override a pending permission/question or its waiting status.
                     if s.permission == nil && s.question == nil {
                         s.status = working ? .working : .idle
@@ -102,7 +103,8 @@ final class IdeWatcher {
                     startedAt: (try? c.url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? c.mtime,
                     updatedAt: c.mtime,
                     tokens: tokens,
-                    workspacePath: activity.cwd))
+                    workspacePath: activity.cwd,
+                    transcriptURL: c.url))
             }
         }
         // Other agents (Grok, Copilot, …) discovered from their own history files.

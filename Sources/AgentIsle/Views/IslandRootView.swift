@@ -6,7 +6,7 @@ struct IslandRootView: View {
     let geometry: NotchGeometry
     @EnvironmentObject var store: SessionStore
 
-    private var expanded: Bool { store.isExpanded || store.isHovering }
+    private var expanded: Bool { store.isExpanded || store.isHovering || store.isPinned }
 
     var body: some View {
         VStack(spacing: 0) {

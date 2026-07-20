@@ -12,6 +12,7 @@ final class NotchWindow: NSPanel {
     private var geometry: NotchGeometry
     private let store: SessionStore
     private var cancellable: AnyCancellable?
+    private var chatCancellable: AnyCancellable?
     private var mouseMonitors: [Any] = []
 
     // The window is a FIXED size large enough for the expanded island and never
@@ -57,6 +58,21 @@ final class NotchWindow: NSPanel {
         cancellable = store.$islandSize
             .removeDuplicates { abs($0.width - $1.width) < 0.5 && abs($0.height - $1.height) < 0.5 }
             .sink { [weak self] size in self?.updateHitRegion(size) }
+
+        // When a chat opens, take key focus so its text field can accept typing.
+        // On close we best-effort resign key: the app is a non-activating accessory,
+        // so the frontmost terminal keeps receiving keystrokes regardless — this just
+        // avoids the panel holding key status if the app was ever activated.
+        chatCancellable = store.$openedSessionID
+            .removeDuplicates()
+            .sink { [weak self] opened in
+                guard let self else { return }
+                if opened != nil {
+                    self.makeKeyAndOrderFront(nil)
+                } else if self.isKeyWindow {
+                    self.resignKey()
+                }
+            }
 
         startPointerMonitoring()
     }
