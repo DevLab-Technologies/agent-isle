@@ -13,7 +13,10 @@ struct SessionRow: View {
                 PermissionCard(session: session, request: permission)
             }
             if let question = session.question {
+                // Key by the question so a superseding prompt resets the card's
+                // selection/other-text state instead of carrying stale choices over.
                 QuestionCard(session: session, question: question)
+                    .id(question)
             }
         }
         .padding(10)
