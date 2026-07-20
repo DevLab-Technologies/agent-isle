@@ -9,6 +9,7 @@ struct ExternalSession {
     let lastMessage: String
     let cwd: String?
     let mtime: Date
+    let historyURL: URL   // on-disk conversation file, parsed by ChatHistory for the chat view
 }
 
 /// Hook-free watchers for other coding agents. Each agent stores its history
@@ -50,7 +51,8 @@ enum ExternalAgents {
                         title: (cwd as NSString).lastPathComponent,
                         lastMessage: msg ?? "Session active",
                         cwd: cwd,
-                        mtime: mtime))
+                        mtime: mtime,
+                        historyURL: history))
                 }
             }
             return topN(found, limit)
@@ -103,7 +105,8 @@ enum ExternalAgents {
                     title: cwd.map { ($0 as NSString).lastPathComponent } ?? "copilot",
                     lastMessage: text,
                     cwd: cwd,
-                    mtime: mtime))
+                    mtime: mtime,
+                    historyURL: file))
             }
             return topN(found, limit)
         }

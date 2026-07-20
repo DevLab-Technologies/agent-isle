@@ -204,7 +204,7 @@ struct AgentSession: Identifiable, Equatable {
     var tokens: Int             // total tokens used this session (0 if unknown)
     var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
     var terminalBundleID: String?  // real host app bundle id (from the hook's TERM_PROGRAM)
-    var transcriptURL: URL?     // Claude Code jsonl transcript, for the live chat view
+    var transcriptURL: URL?     // on-disk conversation file (Claude/Grok/Copilot), for the live chat view
 
     init(id: UUID = UUID(),
          agent: AgentKind,

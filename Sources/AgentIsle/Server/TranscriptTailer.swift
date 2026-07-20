@@ -10,6 +10,7 @@ import Foundation
 final class TranscriptTailer {
     private var timer: Timer?
     private var url: URL?
+    private var agent: AgentKind = .unknown
     private var lastMTime: Date?
     /// Bumped on every start/stop. A parse dispatched under one generation is discarded
     /// if it lands after the tailer has moved on, so a slow read of a previous session
@@ -22,10 +23,11 @@ final class TranscriptTailer {
         self.onUpdate = onUpdate
     }
 
-    /// Begin tailing `url`, delivering an initial load immediately.
-    func start(url: URL) {
+    /// Begin tailing `url` for `agent`'s history format, delivering an initial load immediately.
+    func start(url: URL, agent: AgentKind) {
         stop()
         self.url = url
+        self.agent = agent
         self.lastMTime = nil
         tick()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
@@ -48,10 +50,11 @@ final class TranscriptTailer {
         lastMTime = m
         let gen = generation
         let fileURL = url
+        let agent = agent
         // Parse off the main thread — transcripts can be hundreds of KB — then hop back
         // to the main actor to deliver, dropping the result if the tailer has moved on.
         Task { [weak self] in
-            let msgs = await Task.detached { TranscriptReader.messages(in: fileURL) }.value
+            let msgs = await Task.detached { ChatHistory.messages(for: agent, url: fileURL) }.value
             guard let self, self.generation == gen else { return }   // stale read
             self.onUpdate(msgs)
         }

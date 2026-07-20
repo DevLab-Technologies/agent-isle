@@ -14,6 +14,11 @@ let package = Package(
             resources: [
                 .copy("Resources/AppIcon.icns")
             ]
+        ),
+        .testTarget(
+            name: "AgentIsleTests",
+            dependencies: ["AgentIsle"],
+            path: "Tests/AgentIsleTests"
         )
     ]
 )

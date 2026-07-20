@@ -161,7 +161,7 @@ final class SessionStore: ObservableObject {
         guard let url = session.transcriptURL, url != tailedURL else { return }
         tailedURL = url
         chatLoading = true
-        tailer.start(url: url)
+        tailer.start(url: url, agent: session.agent)
     }
 
     /// Deliver a typed message into the session's terminal.

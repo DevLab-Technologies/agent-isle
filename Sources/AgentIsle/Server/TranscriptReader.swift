@@ -139,7 +139,7 @@ enum TranscriptReader {
                 }
             case "tool_use":
                 let name = block["name"] as? String ?? "Tool"
-                blocks.append(.toolUse(name: name, detail: toolDetail(name: name, input: block["input"] as? [String: Any])))
+                blocks.append(.toolUse(name: name, detail: argDetail(block["input"] as? [String: Any])))
             case "tool_result":
                 sawToolResult = true
                 let text = toolResultText(block["content"])
@@ -155,14 +155,25 @@ enum TranscriptReader {
         return ChatMessage(id: uuid, role: role, blocks: blocks, timestamp: ts)
     }
 
-    /// Short "what the tool is doing" line, reusing the same phrasing as the status tail.
-    private static func toolDetail(name: String, input: [String: Any]?) -> String? {
-        let target = (input?["file_path"] as? String).map { ($0 as NSString).lastPathComponent }
+    /// Pull a concise target out of a tool-call input dict (path, command, pattern…).
+    /// Shared by the Claude parser and the other-agent parsers, whose arguments arrive
+    /// as a JSON string (see `toolDetail(fromArgumentsJSON:)`).
+    static func argDetail(_ input: [String: Any]?) -> String? {
+        let target = (input?["file_path"] as? String ?? input?["path"] as? String)
+                .map { ($0 as NSString).lastPathComponent }
             ?? (input?["command"] as? String)
             ?? (input?["pattern"] as? String)
             ?? (input?["description"] as? String)
         guard let target, !target.isEmpty else { return nil }
         return clamp(target, 120)
+    }
+
+    /// Same as `argDetail`, but the arguments are a JSON string (Grok/Copilot tool calls).
+    static func toolDetail(fromArgumentsJSON json: Any?) -> String? {
+        guard let str = json as? String,
+              let data = str.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return argDetail(dict)
     }
 
     /// Flattens a tool_result's content (string or array of text blocks) to plain text.
@@ -175,7 +186,7 @@ enum TranscriptReader {
         return ""
     }
 
-    private static func clamp(_ text: String, _ max: Int) -> String {
+    static func clamp(_ text: String, _ max: Int) -> String {
         text.count > max ? String(text.prefix(max)) + "…" : text
     }
 
@@ -231,7 +242,7 @@ enum TranscriptReader {
     }
 
     /// Reads the last `maxBytes` of the file and splits into lines.
-    private static func tailLines(of url: URL, maxBytes: Int) -> [String] {
+    static func tailLines(of url: URL, maxBytes: Int) -> [String] {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
         defer { try? handle.close() }
         let end = (try? handle.seekToEnd()) ?? 0
