@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Isle — a Dynamic Island for your coding agents</title>
+<meta name="description" content="Agent Isle is a native macOS app that puts your AI coding agents — Claude Code, Grok, Copilot and more — in the notch. Monitor, approve, and jump back without leaving your flow.">
+<meta property="og:title" content="Agent Isle">
+<meta property="og:description" content="A Dynamic Island for your coding agents. Monitor, approve, and jump back — right from the notch.">
+<meta property="og:image" content="preview.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='24' fill='%2314121c'/%3E%3Cpath d='M30 32 L52 50 L30 68' stroke='%2363f0e8' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Crect x='60' y='38' width='14' height='26' rx='3' fill='%23ff5fa2'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0a0910; --bg2:#12101a; --panel:#16131f; --line:rgba(255,255,255,.08);
+    --ink:#eceaf2; --muted:#9a97a8; --cyan:#63f0e8; --magenta:#ff5fa2;
+    --claude:#d9874f; --green:#5cd48c; --blue:#6b99fa; --amber:#fac04d;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;line-height:1.6;overflow-x:hidden}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);
+    background:rgba(10,9,16,.7);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;gap:20px;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--mono);
+    font-weight:700;letter-spacing:.5px}
+  .brand svg{width:26px;height:26px}
+  .nav-links{display:flex;gap:22px;margin-left:auto;font-size:14px;color:var(--muted)}
+  .nav-links a:hover{color:var(--ink)}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;
+    font-size:14px;font-weight:600;border:1px solid var(--line);transition:.15s}
+  .btn-primary{background:var(--ink);color:#0a0910;border-color:var(--ink)}
+  .btn-primary:hover{transform:translateY(-1px)}
+  .btn-ghost:hover{border-color:rgba(255,255,255,.25);background:rgba(255,255,255,.04)}
+  @media(max-width:720px){.nav-links{display:none}}
+
+  /* hero */
+  header.hero{position:relative;text-align:center;padding:96px 0 40px;
+    background:radial-gradient(1000px 500px at 50% -10%,rgba(99,240,232,.06),transparent 60%),
+      radial-gradient(800px 500px at 80% 0%,rgba(255,95,162,.06),transparent 55%)}
+  .dots{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);
+    background-size:22px 22px;mask-image:linear-gradient(180deg,#000,transparent 70%);pointer-events:none}
+  h1{font-family:var(--mono);font-size:clamp(38px,7vw,76px);line-height:1.05;margin:0 0 20px;
+    letter-spacing:-1px;font-weight:800}
+  h1 .grad{background:linear-gradient(90deg,var(--cyan),var(--magenta));-webkit-background-clip:text;
+    background-clip:text;color:transparent}
+  .sub{font-size:clamp(16px,2.4vw,20px);color:var(--muted);max-width:620px;margin:0 auto 32px}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .cta .btn{padding:14px 22px;font-size:15px}
+  .tiny{margin-top:14px;font-size:13px;color:var(--muted);font-family:var(--mono)}
+
+  /* preview */
+  .preview{margin:56px auto 0;max-width:640px;padding:0 24px}
+  .preview img{width:100%;border-radius:20px;box-shadow:0 40px 120px rgba(0,0,0,.6);
+    border:1px solid var(--line)}
+
+  /* section */
+  section{padding:80px 0}
+  .eyebrow{font-family:var(--mono);font-size:13px;color:var(--cyan);letter-spacing:2px;
+    text-transform:uppercase;margin-bottom:12px}
+  h2{font-family:var(--mono);font-size:clamp(26px,4vw,40px);margin:0 0 14px;letter-spacing:-.5px}
+  .lead{color:var(--muted);font-size:18px;max-width:640px}
+  .center{text-align:center}.center .lead{margin:0 auto}
+
+  /* feature grid */
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:44px}
+  @media(max-width:860px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;transition:.15s}
+  .card:hover{border-color:rgba(255,255,255,.18);transform:translateY(-2px)}
+  .card .ic{font-family:var(--mono);font-size:20px;width:42px;height:42px;display:grid;place-items:center;
+    border-radius:11px;margin-bottom:16px;background:rgba(255,255,255,.05);border:1px solid var(--line)}
+  .card h3{margin:0 0 8px;font-size:17px;font-family:var(--mono)}
+  .card p{margin:0;color:var(--muted);font-size:14.5px}
+
+  /* agents */
+  .agents{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:36px}
+  .chip{font-family:var(--mono);font-size:14px;padding:10px 16px;border-radius:999px;
+    background:var(--panel);border:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .chip .d{width:8px;height:8px;border-radius:50%}
+
+  /* opensource band */
+  .band{background:linear-gradient(180deg,rgba(99,240,232,.05),rgba(255,95,162,.05));
+    border:1px solid var(--line);border-radius:24px;padding:56px 32px;text-align:center;margin:0 24px}
+  .band .price{font-family:var(--mono);font-size:44px;font-weight:800;margin:8px 0}
+  .band .price small{font-size:16px;color:var(--muted);font-weight:500}
+
+  /* faq */
+  details{border-bottom:1px solid var(--line);padding:20px 0}
+  summary{cursor:pointer;font-family:var(--mono);font-size:16px;list-style:none;display:flex;
+    justify-content:space-between;align-items:center}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";color:var(--muted);font-size:22px}
+  details[open] summary::after{content:"–"}
+  details p{color:var(--muted);margin:14px 0 0}
+
+  footer{border-top:1px solid var(--line);padding:40px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px}
+  footer a:hover{color:var(--ink)}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute"><symbol id="logo" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="24" fill="#14121c"/>
+  <path d="M30 32 L52 50 L30 68" stroke="#63f0e8" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="60" y="38" width="14" height="26" rx="3" fill="#ff5fa2"/>
+</symbol></svg>
+
+<nav><div class="wrap">
+  <a class="brand" href="#top"><svg><use href="#logo"/></svg> AGENT ISLE</a>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#agents">Agents</a>
+    <a href="#faq">FAQ</a>
+  </div>
+  <a class="btn btn-ghost" href="https://github.com/DevLab-Technologies/agent-isle" style="margin-left:auto">GitHub</a>
+  <a class="btn btn-primary" href="https://github.com/DevLab-Technologies/agent-isle/releases/latest">Download</a>
+</div></nav>
+
+<header class="hero" id="top">
+  <div class="dots"></div>
+  <div class="wrap">
+    <h1>A Dynamic Island<br>for your <span class="grad">coding agents</span></h1>
+    <p class="sub">Stay in flow while your agents keep working. Monitor, approve, and jump
+      back — right from the notch.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/DevLab-Technologies/agent-isle/releases/latest"> Download for macOS</a>
+      <a class="btn btn-ghost" href="https://github.com/DevLab-Technologies/agent-isle">★ Star on GitHub</a>
+    </div>
+    <p class="tiny">Free &amp; open source · Native Swift · macOS 14+</p>
+  </div>
+  <div class="preview">
+    <img src="preview.png" alt="Agent Isle expanded island showing Claude, Grok, and Copilot sessions">
+  </div>
+</header>
+
+<section class="center" id="glance">
+  <div class="wrap">
+    <div class="eyebrow">Every agent, one glance</div>
+    <h2>All your sessions, in the notch</h2>
+    <p class="lead">Claude Code, Grok, and Copilot — running in your terminal or IDE — surface
+      in a single view. Hover the notch to expand; click a session to jump straight to it.</p>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="eyebrow">Features</div>
+    <h2>Built for people juggling agents</h2>
+    <div class="grid">
+      <div class="card"><div class="ic">◱</div><h3>Notch-native</h3>
+        <p>A pill that hugs the notch and expands into a full session panel. Never blocks the menu bar or your windows.</p></div>
+      <div class="card"><div class="ic">✳</div><h3>Every agent</h3>
+        <p>Claude Code (terminal, VS Code, Cursor, Desktop), Grok, and GitHub Copilot — discovered automatically, no config.</p></div>
+      <div class="card"><div class="ic">✓</div><h3>Approve from the notch</h3>
+        <p>Claude Code permission requests show an inline diff. Allow or deny with ⌘Y / ⌘N — the decision flows straight back.</p></div>
+      <div class="card"><div class="ic">→</div><h3>Click to jump</h3>
+        <p>Click a session to focus its terminal or IDE — detected via TERM_PROGRAM, so integrated terminals land in the right window.</p></div>
+      <div class="card"><div class="ic">◌</div><h3>Usage at a glance</h3>
+        <p>See tokens used per session and live working / idle status, with the latest activity line and git branch.</p></div>
+      <div class="card"><div class="ic">♪</div><h3>8-bit sound alerts</h3>
+        <p>Synthesized chiptune cues for permission, approve, deny, and done. No audio files — generated at runtime.</p></div>
+      <div class="card"><div class="ic">⌂</div><h3>Fully local</h3>
+        <p>No cloud, no accounts, no telemetry. Reads each agent's session history on your Mac. Nothing leaves the machine.</p></div>
+      <div class="card"><div class="ic">✦</div><h3>Pure Swift</h3>
+        <p>Native SwiftUI, no Electron. Universal build for Apple Silicon &amp; Intel, under 100&nbsp;MB RAM.</p></div>
+      <div class="card"><div class="ic">◇</div><h3>Extensible</h3>
+        <p>A small adapter per tool. Add your own agent, or POST to the local event server from anything.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="center" id="agents">
+  <div class="wrap">
+    <div class="eyebrow">Supported</div>
+    <h2>Works with your stack</h2>
+    <div class="agents">
+      <span class="chip"><span class="d" style="background:var(--claude)"></span>Claude Code</span>
+      <span class="chip"><span class="d" style="background:#cfcfd6"></span>Grok</span>
+      <span class="chip"><span class="d" style="background:var(--blue)"></span>Copilot</span>
+      <span class="chip"><span class="d" style="background:var(--muted)"></span>Cursor <small>&nbsp;(via hooks)</small></span>
+      <span class="chip"><span class="d" style="background:var(--muted)"></span>Any tool <small>&nbsp;(event API)</small></span>
+    </div>
+    <p class="lead" style="margin-top:28px">Terminals too: iTerm2, Ghostty, Warp, Terminal.app, WezTerm, Kitty — precise jump to the right app.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="band">
+      <div class="eyebrow" style="color:var(--magenta)">Free forever</div>
+      <div class="price">$0 <small>· MIT licensed</small></div>
+      <p class="lead" style="margin:0 auto 24px">No subscriptions, no license keys. Download it, build it, fork it.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/DevLab-Technologies/agent-isle/releases/latest">Download</a>
+        <a class="btn btn-ghost" href="https://github.com/DevLab-Technologies/agent-isle">View source</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap" style="max-width:760px">
+    <div class="eyebrow center">FAQ</div>
+    <h2 class="center" style="margin-bottom:32px">Questions</h2>
+    <details open><summary>Does my data leave my machine?</summary>
+      <p>No. Agent Isle reads each agent's local session history and runs a localhost-only
+      event server. There's no cloud, no account, and no telemetry.</p></details>
+    <details><summary>Which agents are supported?</summary>
+      <p>Claude Code (terminal, VS Code, Cursor, and Desktop sessions), Grok, and GitHub
+      Copilot work out of the box. Any other tool can appear by POSTing to the local event
+      server, and Cursor can report via its hooks.</p></details>
+    <details><summary>Do I need to configure anything?</summary>
+      <p>Monitoring is automatic and hook-free. To also approve Claude Code permissions from
+      the notch, Agent Isle can add hooks to your Claude config — it asks on first launch,
+      with an opt-out, and you can toggle it anytime from the gear menu.</p></details>
+    <details><summary>Is it really free?</summary>
+      <p>Yes — MIT licensed and open source. Download a build from Releases or build it
+      yourself with <code>swift build</code>.</p></details>
+    <details><summary>Why does macOS warn on first launch?</summary>
+      <p>Release builds are ad-hoc signed, not notarized. Right-click the app → Open the
+      first time, or run <code>xattr -dr com.apple.quarantine "/Applications/Agent Isle.app"</code>.</p></details>
+  </div>
+</section>
+
+<footer><div class="wrap">
+  <span class="brand"><svg style="width:22px;height:22px"><use href="#logo"/></svg> Agent Isle</span>
+  <span>MIT © DevLab Technologies · <a href="https://github.com/DevLab-Technologies/agent-isle">GitHub</a></span>
+</div></footer>
+
+</body>
+</html>
