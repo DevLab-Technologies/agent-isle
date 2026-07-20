@@ -6,6 +6,10 @@ agents — Claude Code, Grok, Copilot and more — without leaving your flow.
 
 Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB RAM.
 
+<p align="center">
+  <img src="docs/preview.png" alt="Agent Isle expanded island showing Claude, Grok, and Copilot sessions" width="560">
+</p>
+
 > Icon: a neon terminal prompt — `>` and a block cursor.
 
 ## Features
