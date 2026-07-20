@@ -117,6 +117,7 @@ final class IdeWatcher {
                     s.title = e.title
                     s.lastMessage = e.lastMessage
                     s.workspacePath = e.cwd
+                    s.transcriptURL = e.historyURL
                     s.status = working ? .working : .idle
                 }
             } else {
@@ -124,7 +125,8 @@ final class IdeWatcher {
                 store.upsert(AgentSession(
                     id: e.id, agent: e.agent, title: e.title, terminal: e.terminal,
                     lastMessage: e.lastMessage, status: working ? .working : .idle,
-                    startedAt: e.mtime, updatedAt: e.mtime, workspacePath: e.cwd))
+                    startedAt: e.mtime, updatedAt: e.mtime, workspacePath: e.cwd,
+                    transcriptURL: e.historyURL))
             }
         }
 

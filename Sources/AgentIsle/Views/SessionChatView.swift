@@ -89,8 +89,8 @@ struct SessionChatView: View {
     private let bottomAnchor = "chat-bottom"
 
     @ViewBuilder private var emptyState: some View {
-        if session.transcriptURL == nil {
-            chatNotice("Live transcript is available for Claude Code sessions.\nYou can still send a message below.")
+        if session.transcriptURL == nil || !ChatHistory.isSupported(session.agent) {
+            chatNotice("Live history isn't available for this session.\nYou can still send a message below.")
         } else if store.chatLoading {
             chatNotice("Loading conversation…")
         } else {

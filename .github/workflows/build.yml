@@ -18,6 +18,9 @@ jobs:
       - name: Build (debug)
         run: swift build
 
+      - name: Test
+        run: swift test
+
       - name: Build (release)
         run: swift build -c release
 
