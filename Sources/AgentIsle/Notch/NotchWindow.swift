@@ -12,6 +12,7 @@ final class NotchWindow: NSPanel {
     private var geometry: NotchGeometry
     private let store: SessionStore
     private var cancellable: AnyCancellable?
+    private var mouseMonitors: [Any] = []
 
     // The window is a FIXED size large enough for the expanded island and never
     // resizes — resizing on hover caused mouse-tracking flicker near the notch.
@@ -39,6 +40,7 @@ final class NotchWindow: NSPanel {
         isOpaque = false
         hasShadow = false
         hidesOnDeactivate = false
+        acceptsMouseMovedEvents = true
 
         let container = PassthroughView(frame: NSRect(x: 0, y: 0, width: fixedWidth, height: fixedHeight))
         let root = IslandRootView(geometry: geometry).environmentObject(store)
@@ -55,6 +57,36 @@ final class NotchWindow: NSPanel {
         cancellable = store.$islandSize
             .removeDuplicates { abs($0.width - $1.width) < 0.5 && abs($0.height - $1.height) < 0.5 }
             .sink { [weak self] size in self?.updateHitRegion(size) }
+
+        startPointerMonitoring()
+    }
+
+    deinit {
+        for monitor in mouseMonitors { NSEvent.removeMonitor(monitor) }
+    }
+
+    /// Drive the island's hover state from the real pointer location instead of
+    /// SwiftUI's `.onHover`, whose mouse-exit event is unreliable at the top screen
+    /// edge and would occasionally leave the island stuck open. A global monitor
+    /// catches movement over other apps; a local one catches movement over our panel.
+    private func startPointerMonitoring() {
+        let global = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) {
+            [weak self] _ in self?.syncHoverToPointer()
+        }
+        let local = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) {
+            [weak self] event in self?.syncHoverToPointer(); return event
+        }
+        mouseMonitors = [global, local].compactMap { $0 }
+        syncHoverToPointer()
+    }
+
+    private func syncHoverToPointer() {
+        guard let view = contentView as? PassthroughView else { return }
+        // `interactiveRect` is in the borderless window's base coordinates, so it
+        // converts straight to screen space for comparison with the cursor.
+        let screenRect = convertToScreen(view.interactiveRect)
+        let inside = screenRect.contains(NSEvent.mouseLocation)
+        MainActor.assumeIsolated { store.setHovering(inside) }
     }
 
     private func positionWindow() {
