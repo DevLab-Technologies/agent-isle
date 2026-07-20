@@ -112,7 +112,7 @@ final class SessionStore: ObservableObject {
         sessions = SessionStore.demoSessions()
         demoTimer?.invalidate()
         demoTimer = Timer.scheduledTimer(withTimeInterval: 3.2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tickDemo() }
+            Task { @MainActor [weak self] in self?.tickDemo() }
         }
     }
 

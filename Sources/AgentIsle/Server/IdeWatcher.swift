@@ -38,7 +38,7 @@ final class IdeWatcher {
     func start() {
         scan()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.scan() }
+            Task { @MainActor [weak self] in self?.scan() }
         }
     }
 

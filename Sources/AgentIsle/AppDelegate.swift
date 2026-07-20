@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.notchWindow?.reposition() }
+                Task { @MainActor [weak self] in self?.notchWindow?.reposition() }
             }
     }
 

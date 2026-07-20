@@ -37,7 +37,7 @@ final class EventServer {
             }
             listener.newConnectionHandler = { [weak self] conn in
                 conn.start(queue: .main)
-                Task { @MainActor in self?.receive(on: conn) }
+                Task { @MainActor [weak self] in self?.receive(on: conn) }
             }
             listener.start(queue: .main)
             self.listener = listener
