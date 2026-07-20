@@ -36,14 +36,19 @@ enum HookInstaller {
         fm.fileExists(atPath: claudeDir.path)
     }
 
-    /// True if our hooks are present in settings.json.
+    /// True only if our hooks are installed AND point at the script that currently
+    /// exists on disk. A hook that merely carries the marker but references an old
+    /// path (or a script that's been deleted) counts as NOT installed, so we
+    /// re-prompt and `install()` repairs it. A stale command like this is also what
+    /// can block every Claude Code tool call, so we never treat it as "done".
     static func isInstalled() -> Bool {
+        guard fm.fileExists(atPath: installedHookURL.path) else { return false }
         guard let hooks = readSettings()?["hooks"] as? [String: Any] else { return false }
         for (_, value) in hooks {
             guard let groups = value as? [[String: Any]] else { continue }
             for group in groups {
                 for cmd in (group["hooks"] as? [[String: Any]] ?? []) {
-                    if (cmd["command"] as? String)?.contains(marker) == true { return true }
+                    if (cmd["command"] as? String)?.contains(installedHookURL.path) == true { return true }
                 }
             }
         }
