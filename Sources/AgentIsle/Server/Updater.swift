@@ -49,11 +49,11 @@ final class Updater: ObservableObject {
     /// Begin automatic checks: once shortly after launch, then every few hours.
     func start() {
         guard isPackagedApp else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-            Task { @MainActor in self?.checkForUpdates(userInitiated: false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            Task { @MainActor in Updater.shared.checkForUpdates(userInitiated: false) }
         }
-        let t = Timer(timeInterval: checkInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkForUpdates(userInitiated: false) }
+        let t = Timer(timeInterval: checkInterval, repeats: true) { _ in
+            Task { @MainActor in Updater.shared.checkForUpdates(userInitiated: false) }
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
@@ -143,8 +143,18 @@ final class Updater: ObservableObject {
     // MARK: - Download & install
 
     private func downloadAndInstall(_ release: Release) async {
+        // Can only swap a real .app bundle in place — never a `swift run` dev process.
+        guard isPackagedApp else {
+            if showInfo("Update available: Agent Isle \(release.cleanVersion)",
+                        "Open the releases page to download it.",
+                        confirm: "Open Releases Page") {
+                NSWorkspace.shared.open(release.pageURL)
+            }
+            return
+        }
         do {
-            let (tmp, _) = try await URLSession.shared.download(from: release.assetURL)
+            let (tmp, resp) = try await URLSession.shared.download(from: release.assetURL)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError.unpackFailed }
 
             let work = fm.temporaryDirectory
                 .appendingPathComponent("agent-isle-update-\(UUID().uuidString)")
@@ -200,12 +210,15 @@ final class Updater: ObservableObject {
         DEST=\(shellQuote(dest.path))
         BACKUP="${DEST}.old-$$"
         while /bin/kill -0 "$APP_PID" 2>/dev/null; do /bin/sleep 0.2; done
-        /bin/mv "$DEST" "$BACKUP"
-        if /usr/bin/ditto "$SRC" "$DEST"; then
-          /usr/bin/xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
-          /bin/rm -rf "$BACKUP"
-        else
-          /bin/rm -rf "$DEST"; /bin/mv "$BACKUP" "$DEST"
+        # Only swap if we can safely move the current bundle aside first; otherwise
+        # leave it untouched (a failed update must never delete the installed app).
+        if /bin/mv "$DEST" "$BACKUP"; then
+          if /usr/bin/ditto "$SRC" "$DEST"; then
+            /usr/bin/xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+            /bin/rm -rf "$BACKUP"
+          else
+            /bin/rm -rf "$DEST"; /bin/mv "$BACKUP" "$DEST"
+          fi
         fi
         /usr/bin/open "$DEST"
         """
