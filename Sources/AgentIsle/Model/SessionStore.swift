@@ -51,6 +51,16 @@ final class SessionStore: ObservableObject {
 
     private var demoTimer: Timer?
 
+    /// Transcript-detected questions the user has already answered, with when they did,
+    /// keyed by session. The poller keeps seeing the pending `AskUserQuestion` in the JSONL
+    /// until the agent records its response, so this stops it from resurfacing (and
+    /// re-chiming) the same card in that window. Cleared once the transcript moves past the
+    /// question, or once the grace window lapses (see `wasTranscriptQuestionAnswered`).
+    private var answeredTranscriptQuestions: [UUID: (question: AgentQuestion, at: Date)] = [:]
+    /// How long an answered transcript question stays suppressed before it may resurface
+    /// (in case a best-effort answer never reached the agent). `var` so tests can adjust it.
+    var answeredQuestionGrace: TimeInterval = 8
+
     // MARK: - Derived state
 
     /// Sessions ordered by how much they need attention.
@@ -78,14 +88,22 @@ final class SessionStore: ObservableObject {
 
     /// Report whether the pointer is inside the island. Entry applies immediately;
     /// exit is debounced slightly so brief tracking drops near the notch don't flicker.
+    ///
+    /// Exit is idempotent: while a collapse is already scheduled, further "outside"
+    /// reports are ignored rather than rescheduling it. This lets a caller poll the
+    /// pointer (every frame) without the deadline being pushed back on every tick — which
+    /// would otherwise mean the island never actually collapses.
     func setHovering(_ inside: Bool) {
-        hoverCollapseWork?.cancel()
-        hoverCollapseWork = nil
         if inside {
+            hoverCollapseWork?.cancel()
+            hoverCollapseWork = nil
             if !isHovering { isHovering = true }
         } else {
-            guard isHovering else { return }
-            let work = DispatchWorkItem { [weak self] in self?.isHovering = false }
+            guard isHovering, hoverCollapseWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                self?.hoverCollapseWork = nil
+                self?.isHovering = false
+            }
             hoverCollapseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
         }
@@ -116,6 +134,7 @@ final class SessionStore: ObservableObject {
         sessions.removeAll { $0.id == id }
         bypassedSessions.remove(id)
         alwaysAllowed[id] = nil
+        answeredTranscriptQuestions[id] = nil
         if id == openedSessionID { closeChat() }
     }
 
@@ -219,17 +238,68 @@ final class SessionStore: ObservableObject {
 
     /// Send the user's answer (one option, several joined options, or free text) back
     /// to the waiting agent. Ignores empty answers so a stray submit can't resolve it.
+    ///
+    /// Delivery depends on how the question reached us. A hook-pushed question has a
+    /// parked connection, so the answer replies straight to the blocked hook. A
+    /// transcript-detected question (Desktop app / no reachable hook) has no such channel,
+    /// so we type the answer into the session's host app — best-effort, the same terminal-
+    /// driving transport as in-notch chat, and it may not land in the Desktop app.
     func answerQuestion(sessionID: UUID, answer: String) {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: "; ")
+        let session = sessions.first { $0.id == sessionID }
+        let viaTranscript = session?.question?.source == .transcript
+        // Remember an answered transcript question so the poller doesn't resurface it
+        // while the answer is in flight.
+        if viaTranscript, let q = session?.question {
+            noteAnsweredTranscriptQuestion(sessionID, q)
+        }
         update(id: sessionID) { s in
             s.question = nil
             s.status = .working
-            s.lastMessage = "You chose: \(oneLine)"
+            s.lastMessage = viaTranscript ? "Sent to \(s.terminal): \(oneLine)" : "You chose: \(oneLine)"
         }
         SoundPlayer.shared.play(.select)
-        EventServer.shared?.reply(sessionID: sessionID, decision: trimmed)
+        if viaTranscript, let session {
+            sendError = nil
+            // Deliver the flattened one-line form (MessageSender flattens too, but keep
+            // what we typed identical to what we recorded as the session's last message).
+            MessageSender.send(oneLine, to: session) { [weak self] result in
+                if case .failure(let error) = result {
+                    self?.sendError = error.userMessage
+                    SoundPlayer.shared.play(.deny)
+                }
+            }
+        } else {
+            EventServer.shared?.reply(sessionID: sessionID, decision: trimmed)
+        }
+    }
+
+    /// Record that the user answered a transcript-detected question, with the time it
+    /// happened. Extracted so the poller-suppression logic is unit-testable without
+    /// driving the real message transport.
+    func noteAnsweredTranscriptQuestion(_ sessionID: UUID, _ question: AgentQuestion) {
+        answeredTranscriptQuestions[sessionID] = (question, Date())
+    }
+
+    /// True if `question` is one the user answered for this session recently enough that
+    /// the transcript may not reflect it yet — the poller uses this to avoid resurfacing
+    /// (and re-chiming) it. The grace window is deliberately short: if delivery didn't
+    /// actually land (best-effort typing into the Desktop app), the question resurfaces
+    /// afterward so the user sees it's still waiting rather than silently swallowed.
+    func wasTranscriptQuestionAnswered(_ sessionID: UUID, _ question: AgentQuestion) -> Bool {
+        guard let marker = answeredTranscriptQuestions[sessionID], marker.question == question
+        else { return false }
+        return Date().timeIntervalSince(marker.at) < answeredQuestionGrace
+    }
+
+    /// Forget the answered-marker once the transcript's pending question changes or clears,
+    /// so a genuinely new question later can surface again.
+    func reconcileAnsweredQuestion(_ sessionID: UUID, current: AgentQuestion?) {
+        if let marker = answeredTranscriptQuestions[sessionID], marker.question != current {
+            answeredTranscriptQuestions[sessionID] = nil
+        }
     }
 
     func acknowledge(sessionID: UUID) {

@@ -6,10 +6,25 @@ struct CollapsedIsland: View {
     let notchWidth: CGFloat
     let notchHeight: CGFloat
     @EnvironmentObject var store: SessionStore
+    @EnvironmentObject var settings: AppSettings
 
     private var focus: AgentSession? { store.focusSession }
 
-    private let earWidth: CGFloat = 148
+    /// How many of the focus session's sub-agents are actively working right now.
+    private var workingSubAgents: Int {
+        focus?.subAgents.filter(\.working).count ?? 0
+    }
+
+    /// Wider ears so the session title has real room before it truncates (the old 148
+    /// clipped most repo·branch titles after ~14 chars).
+    private let earWidth: CGFloat = 176
+
+    /// Color of the "needs you" signal — amber for a pending permission, purple for a
+    /// question, matching the per-status colors used everywhere else.
+    private var attentionColor: Color {
+        store.sessions.contains { $0.status == .waiting }
+            ? SessionStatus.waiting.color : SessionStatus.asking.color
+    }
 
     var body: some View {
         // Symmetric ears with a fixed center gap == the physical notch, so the gap
@@ -17,12 +32,12 @@ struct CollapsedIsland: View {
         HStack(spacing: 0) {
             leftCluster
                 .frame(width: earWidth, alignment: .trailing)
-                .padding(.trailing, 10)
+                .padding(.trailing, Theme.Space.md)
             Color.clear
                 .frame(width: notchWidth)   // the physical notch lives here
             rightCluster
                 .frame(width: earWidth, alignment: .leading)
-                .padding(.leading, 10)
+                .padding(.leading, Theme.Space.md)
         }
         .frame(height: max(notchHeight, 30))
         .background(
@@ -31,41 +46,57 @@ struct CollapsedIsland: View {
         )
         .overlay(
             NotchShape(bottomRadius: 16)
-                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
+                .stroke(Theme.Fill.hairline, lineWidth: 0.5)
         )
         .fixedSize()
     }
 
     @ViewBuilder private var leftCluster: some View {
         if let s = focus {
-            HStack(spacing: 6) {
+            HStack(spacing: Theme.Space.sm) {
                 StatusDot(status: s.status)
                 Text(s.agent.glyph)
+                    .font(.system(size: 11))
                     .foregroundStyle(s.agent.tint)
-                    .font(.system(size: 12))
                 Text(s.title)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Theme.Ink.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
         } else {
             AppMark(size: 15)
         }
     }
 
+    // Right ear reads outward from the notch: the live signal first, then a muted total.
+    // Only the most useful thing shows — no ambiguous "•••", and no lone "1".
     @ViewBuilder private var rightCluster: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Theme.Space.sm) {
             if store.attentionCount > 0 {
-                CountBadge(count: store.attentionCount, color: SessionStatus.waiting.color)
+                CountBadge(count: store.attentionCount, color: attentionColor)
             } else if store.workingCount > 0 {
-                WorkingIndicator()
+                LivePulse(color: SessionStatus.working.color)
             }
-            if !store.sessions.isEmpty {
+            // How many sub-agents the surfaced session is running, right by the pulse.
+            if settings.showSubAgents, workingSubAgents > 0 {
+                HStack(spacing: 3) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text("\(workingSubAgents)")
+                        .font(Theme.Font.label(9.5, weight: .semibold))
+                }
+                .foregroundStyle(SessionStatus.working.color)
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(Capsule().fill(SessionStatus.working.color.opacity(0.14)))
+            }
+            if store.sessions.count > 1 {
                 Text("\(store.sessions.count)")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                    .font(Theme.Font.label(10.5, weight: .semibold))
+                    .foregroundStyle(Theme.Ink.tertiary)
+                    .padding(.horizontal, Theme.Space.sm).padding(.vertical, 2)
+                    .background(Capsule().fill(Theme.Fill.card))
+                    .overlay(Capsule().stroke(Theme.Fill.hairline, lineWidth: 0.5))
             }
         }
     }
@@ -105,20 +136,27 @@ struct CountBadge: View {
     }
 }
 
-struct WorkingIndicator: View {
-    @State private var phase = 0.0
+/// A single dot with a soft expanding halo — a clear "live / working" pulse that reads as
+/// activity rather than the old three-dot cluster, which looked like an overflow menu.
+struct LivePulse: View {
+    let color: Color
+    @State private var animate = false
+
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<3) { i in
-                Circle()
-                    .fill(Color.white.opacity(0.7))
-                    .frame(width: 3, height: 3)
-                    .opacity(0.35 + 0.65 * abs(sin(phase + Double(i) * 0.7)))
-            }
+        ZStack {
+            Circle()
+                .fill(color.opacity(0.35))
+                .frame(width: 7, height: 7)
+                .scaleEffect(animate ? 2.1 : 1)
+                .opacity(animate ? 0 : 0.6)
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
         }
+        .frame(width: 15, height: 15)
         .onAppear {
-            withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) {
-                phase = .pi * 2
+            withAnimation(.easeOut(duration: 1.1).repeatForever(autoreverses: false)) {
+                animate = true
             }
         }
     }

@@ -10,6 +10,10 @@ enum TranscriptReader {
         var entrypoint: String?
         var model: String?
         var tasks: [AgentTask] = []
+        /// An unanswered `AskUserQuestion` found in the transcript, if any. Populated for
+        /// sessions we only see via polling (Desktop app, or hosts the hook can't reach),
+        /// so a question still surfaces even when no hook pushed it.
+        var question: AgentQuestion? = nil
     }
 
     /// Generic tail reader: walk the last chunk of a JSONL file newest-first and return
@@ -37,6 +41,88 @@ enum TranscriptReader {
                let m = msg["model"] as? String, !m.isEmpty, m != "<synthetic>" { return m }
         }
         return nil
+    }
+
+    // MARK: - Sub-agents
+
+    /// The expensive-to-read bits of a sub-agent transcript, cached across polls: the
+    /// immutable spawn task (read once) and the latest activity (re-read only when the
+    /// file changes). Keyed by agent id in the caller's cache.
+    struct SubAgentCache { var mtime: Date; var title: String; var lastMessage: String }
+
+    /// Discover a session's active background sub-agents. Claude Code writes each one to
+    /// `<session-id>/subagents/agent-*.jsonl` (a sidechain), so while the parent waits its
+    /// own transcript is quiet and these are the only sign of progress. Only the session's
+    /// direct sub-agents are surfaced (not a sub-agent's own nested sub-agents).
+    ///
+    /// `cache` avoids re-reading each file every poll: the task is read once (immutable),
+    /// and the activity line is re-read only when the file's mtime changes. The `working`
+    /// flag is always recomputed from the current time, so it stays live without I/O.
+    static func subAgents(inDir dir: URL, activeWindow: TimeInterval, workingWindow: TimeInterval,
+                          max: Int = 8, cache: inout [String: SubAgentCache]) -> [SubAgent] {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        let now = Date()
+        let recent: [(url: URL, mtime: Date)] = files
+            .filter { $0.pathExtension == "jsonl" }
+            .compactMap { url in
+                let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate) ?? .distantPast
+                return now.timeIntervalSince(m) < activeWindow ? (url, m) : nil
+            }
+            .sorted { $0.mtime > $1.mtime }
+            .prefix(max)
+            .map { $0 }
+        return recent.map { entry in
+            let id = entry.url.deletingPathExtension().lastPathComponent
+            let title: String
+            let lastMessage: String
+            if let hit = cache[id], hit.mtime == entry.mtime {
+                title = hit.title; lastMessage = hit.lastMessage   // file unchanged — no I/O
+            } else {
+                title = cache[id]?.title ?? (firstUserText(in: entry.url) ?? "Sub-agent")
+                lastMessage = activityLine(in: entry.url)
+                cache[id] = SubAgentCache(mtime: entry.mtime, title: title, lastMessage: lastMessage)
+            }
+            return SubAgent(id: id, title: title, lastMessage: lastMessage,
+                            working: now.timeIntervalSince(entry.mtime) < workingWindow,
+                            updatedAt: entry.mtime)
+        }
+    }
+
+    /// The task a sub-agent was spawned with — its first user turn is the spawn prompt.
+    static func firstUserText(in url: URL, maxBytes: Int = 16 * 1024) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: maxBytes)) ?? Data()
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            guard let d = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  (obj["type"] as? String) == "user",
+                  let msg = obj["message"] as? [String: Any] else { continue }
+            if let s = msg["content"] as? String { return firstLine(s) }
+            if let arr = msg["content"] as? [[String: Any]] {
+                for b in arr where (b["type"] as? String) == "text" {
+                    if let t = b["text"] as? String, !t.isEmpty { return firstLine(t) }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// A one-line "what it's doing now" summary from a transcript's newest turn.
+    static func activityLine(in url: URL, maxBytes: Int = 32 * 1024) -> String {
+        for raw in tailLines(of: url, maxBytes: maxBytes).reversed() {
+            guard let d = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            let type = obj["type"] as? String
+            if type == "assistant" || type == "user",
+               let msg = obj["message"] as? [String: Any],
+               let s = summarize(type: type, content: msg["content"]) {
+                return firstLine(s)
+            }
+        }
+        return "Working"
     }
 
     /// Total tokens used across the whole session by summing per-message `usage`
@@ -72,7 +158,12 @@ enum TranscriptReader {
     /// a human-readable activity line plus session metadata (branch, cwd, entrypoint)
     /// from the most recent entries that carry each field.
     static func latestActivity(in url: URL, maxBytes: Int = 96 * 1024) -> Activity {
-        let lines = tailLines(of: url, maxBytes: maxBytes)
+        // Decode the tail once and share it with both scans below.
+        let objs: [[String: Any]] = tailLines(of: url, maxBytes: maxBytes).compactMap { line in
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            return obj
+        }
         var branch: String?
         var cwd: String?
         var entrypoint: String?
@@ -81,10 +172,7 @@ enum TranscriptReader {
         var tasks: [AgentTask]?
 
         // Walk newest -> oldest, filling each field from the first entry that has it.
-        for raw in lines.reversed() {
-            guard let data = raw.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-
+        for obj in objs.reversed() {
             if branch == nil, let b = obj["gitBranch"] as? String, !b.isEmpty { branch = b }
             if cwd == nil, let c = obj["cwd"] as? String, !c.isEmpty { cwd = c }
             if entrypoint == nil, let e = obj["entrypoint"] as? String, !e.isEmpty { entrypoint = e }
@@ -107,7 +195,80 @@ enum TranscriptReader {
         }
         return Activity(text: summary ?? "Session active",
                         branch: branch, cwd: cwd, entrypoint: entrypoint,
-                        model: model, tasks: tasks ?? [])
+                        model: model, tasks: tasks ?? [],
+                        question: pendingQuestion(in: objs))
+    }
+
+    /// Detects an unanswered `AskUserQuestion` in the transcript tail — the poll-path
+    /// equivalent of the hook's question interception. Walks oldest→newest tracking the
+    /// most recent `AskUserQuestion` tool_use and clearing it once a matching `tool_result`
+    /// (the answer) appears, so a question only survives while it's genuinely pending.
+    ///
+    /// A pending ask is the *last* thing in the conversation — the agent is blocked on it.
+    /// So it's also treated as resolved if anything meaningful follows it: a matching
+    /// `tool_result`, a later assistant turn, or a human prompt. That guards against hosts
+    /// that record the answer as a plain continuation rather than a tool_result (otherwise
+    /// the card could linger forever with no way to clear it).
+    private static func pendingQuestion(in objs: [[String: Any]]) -> AgentQuestion? {
+        // Keep the real turns (skip meta rows: attachments, system notices, etc.).
+        struct Turn { let role: String; let blocks: [[String: Any]]; let text: String? }
+        var turns: [Turn] = []
+        for obj in objs {
+            guard let type = obj["type"] as? String, type == "user" || type == "assistant",
+                  let message = obj["message"] as? [String: Any] else { continue }
+            if let blocks = message["content"] as? [[String: Any]] {
+                turns.append(Turn(role: type, blocks: blocks, text: nil))
+            } else if let str = message["content"] as? String {
+                turns.append(Turn(role: type, blocks: [], text: str))
+            }
+        }
+
+        // Find the most recent AskUserQuestion tool_use.
+        var askIndex: Int?
+        var parts: [QuestionPart]?
+        for (i, turn) in turns.enumerated() where turn.role == "assistant" {
+            for block in turn.blocks where (block["type"] as? String) == "tool_use"
+                && (block["name"] as? String) == "AskUserQuestion" {
+                if let p = questionParts(from: block["input"] as? [String: Any]) {
+                    askIndex = i
+                    parts = p
+                }
+            }
+        }
+        guard let idx = askIndex, let parts else { return nil }
+
+        // Pending only if nothing meaningful comes after the ask.
+        let continued = turns[(idx + 1)...].contains { turn in
+            if let text = turn.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return true
+            }
+            return turn.blocks.contains {
+                ["text", "tool_use", "tool_result"].contains($0["type"] as? String ?? "")
+            }
+        }
+        return continued ? nil : AgentQuestion(parts: parts, source: .transcript)
+    }
+
+    /// Parses `AskUserQuestion`'s `questions` input into card parts. Mirrors the hook:
+    /// options come from each choice's `label`, and every question offers a free-text
+    /// answer (`allowsOther`) since the poll path can't gate on option-only replies.
+    private static func questionParts(from input: [String: Any]?) -> [QuestionPart]? {
+        guard let questions = input?["questions"] as? [[String: Any]] else { return nil }
+        let parts: [QuestionPart] = questions.enumerated().compactMap { idx, q in
+            let options = (q["options"] as? [[String: Any]] ?? [])
+                .compactMap { $0["label"] as? String }
+                .filter { !$0.isEmpty }
+            let header = (q["header"] as? String) ?? ""
+            let prompt = (q["question"] as? String) ?? header
+            guard !prompt.isEmpty || !options.isEmpty else { return nil }
+            return QuestionPart(id: idx,
+                                header: header,
+                                prompt: prompt.isEmpty ? "Choose an option" : prompt,
+                                options: options,
+                                multiSelect: (q["multiSelect"] as? Bool) ?? false,
+                                allowsOther: true)
+        }
+        return parts.isEmpty ? nil : parts
     }
 
     /// Extracts the todo list from a message's content if it contains a `TodoWrite`

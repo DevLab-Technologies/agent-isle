@@ -38,9 +38,9 @@ enum MessageSender {
 
         switch bundle {
         case iterm:
-            completion(runAppleScript(itermScript(line)))
+            runScriptOffMain(itermScript(line), completion: completion)
         case terminal:
-            completion(runAppleScript(terminalScript(line)))
+            runScriptOffMain(terminalScript(line), completion: completion)
         default:
             sendViaKeystrokes(line, to: session, completion: completion)
         }
@@ -48,9 +48,22 @@ enum MessageSender {
 
     // MARK: - AppleScript paths
 
+    /// Run AppleScript on a background queue, delivering the result back on the main actor.
+    /// `NSAppleScript.executeAndReturnError` blocks its thread — potentially for a long time
+    /// on the one-time macOS Automation permission prompt, or if the target app is slow —
+    /// so running it on the main thread would freeze the whole UI (and with it the Quit
+    /// menu, leaving no way to exit this accessory app). Off-main, the UI stays responsive.
+    nonisolated private static func runScriptOffMain(
+        _ source: String, completion: @escaping (Result<Void, SendError>) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = runAppleScript(source)
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     // Target by bundle id, not name — iTerm's AppleScript name varies across installs
     // ("iTerm" vs "iTerm2"), whereas the bundle id is stable.
-    private static func itermScript(_ text: String) -> String {
+    nonisolated private static func itermScript(_ text: String) -> String {
         """
         tell application id "\(iterm)"
             activate
@@ -61,7 +74,7 @@ enum MessageSender {
         """
     }
 
-    private static func terminalScript(_ text: String) -> String {
+    nonisolated private static func terminalScript(_ text: String) -> String {
         // `front window` errors if Terminal has no open window — surface a clear reason
         // instead of the raw AppleScript error.
         """
@@ -73,7 +86,7 @@ enum MessageSender {
         """
     }
 
-    private static func runAppleScript(_ source: String) -> Result<Void, SendError> {
+    nonisolated private static func runAppleScript(_ source: String) -> Result<Void, SendError> {
         var errorInfo: NSDictionary?
         guard let script = NSAppleScript(source: source) else {
             return .failure(.scriptFailed("invalid script"))
@@ -86,7 +99,7 @@ enum MessageSender {
     }
 
     /// Escape a string for embedding inside an AppleScript double-quoted literal.
-    private static func escape(_ text: String) -> String {
+    nonisolated private static func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
     }

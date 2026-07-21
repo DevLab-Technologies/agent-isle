@@ -13,6 +13,9 @@ struct SessionRow: View {
             if settings.showTasks, !session.tasks.isEmpty {
                 TaskListView(tasks: session.tasks)
             }
+            if settings.showSubAgents, !session.subAgents.isEmpty {
+                SubAgentListView(subAgents: session.subAgents)
+            }
             if let permission = session.permission {
                 PermissionCard(session: session, request: permission)
             }
