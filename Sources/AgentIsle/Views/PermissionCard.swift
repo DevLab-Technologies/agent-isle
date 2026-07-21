@@ -125,8 +125,9 @@ struct PermissionCard: View {
         }
         var foreground: Color {
             switch self {
-            case .deny:    return Palette.deny
-            case .neutral, .accent, .danger: return self == .neutral ? .black : .white
+            case .deny:            return Palette.deny
+            case .neutral:         return .black       // dark text on the white fill
+            case .accent, .danger: return .white
             }
         }
         var stroke: Color {

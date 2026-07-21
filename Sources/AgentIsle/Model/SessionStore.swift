@@ -191,6 +191,9 @@ final class SessionStore: ObservableObject {
 
     func resolvePermission(sessionID: UUID, decision: PermissionDecision) {
         // Remember the choice so future prompts in this session can auto-answer.
+        // Note: `allowKey` is an exact tool+command signature, so "Always Allow" only
+        // silences an identical request — e.g. the same Bash command with a different
+        // cwd re-prompts. This is deliberately conservative rather than pattern-matching.
         if decision == .bypass { bypassedSessions.insert(sessionID) }
         if decision == .always, let key = sessions.first(where: { $0.id == sessionID })?.permission?.allowKey {
             alwaysAllowed[sessionID, default: []].insert(key)

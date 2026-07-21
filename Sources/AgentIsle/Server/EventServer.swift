@@ -109,8 +109,13 @@ final class EventServer {
 
             // Honor a prior "Always Allow" / "Bypass" for this session: approve silently,
             // without a card, sound, or parking the hook.
-            if store.isAutoAllowed(sessionID: sessionID, key: request.allowKey) {
+            if routePermission(sessionID: sessionID, request: request) == .autoAllow {
+                // Defensive: drop any card/parked hook from an earlier prompt so an
+                // auto-approve can't leave a stale request behind, even though the
+                // sequential-tool assumption means one shouldn't be pending.
+                unpark(sessionID)
                 store.update(id: sessionID) { s in
+                    s.permission = nil
                     s.status = .working
                     s.lastMessage = "Auto-approved \(request.toolName)"
                 }
@@ -197,6 +202,15 @@ final class EventServer {
                      permission: permission,
                      question: question,
                      terminalBundleID: event.term_bundle)
+    }
+
+    /// Whether an incoming permission request should be auto-approved (from a prior
+    /// "Always Allow"/"Bypass") or surfaced as a card. Extracted so the routing is unit
+    /// testable without a live socket.
+    enum PermissionRouting: Equatable { case autoAllow, prompt }
+
+    func routePermission(sessionID: UUID, request: PermissionRequest) -> PermissionRouting {
+        store.isAutoAllowed(sessionID: sessionID, key: request.allowKey) ? .autoAllow : .prompt
     }
 
     // MARK: - Parking / replies for a blocked hook
