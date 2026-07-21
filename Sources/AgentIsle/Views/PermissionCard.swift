@@ -198,6 +198,16 @@ struct QuestionCard: View {
             if !isSimpleSingle {
                 submitButton
             }
+            if question.source == .transcript {
+                // No parked hook to reply to — the answer is typed into the host app.
+                HStack(spacing: 4) {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 8))
+                    Text("Answer is typed into \(session.terminal)")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                }
+                .foregroundStyle(.white.opacity(0.4))
+            }
         }
         .padding(10)
         .background(

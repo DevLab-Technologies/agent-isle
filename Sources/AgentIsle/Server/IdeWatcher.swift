@@ -76,13 +76,27 @@ final class IdeWatcher {
             let terminal = source.label
             let tokens = tokens(for: c)
 
-            if store.sessions.contains(where: { $0.id == id }) {
+            // Drop the answered-marker once the transcript's pending question moves on, so
+            // a genuinely new question can surface later.
+            store.reconcileAnsweredQuestion(id, current: activity.question)
+
+            if let existing = store.sessions.first(where: { $0.id == id }) {
+                // A hook-pushed question owns its slot (it has a parked connection); never
+                // let the poller override it. Otherwise surface a transcript question,
+                // unless the user just answered this exact one (still lingering in the JSONL).
+                let hookOwned = existing.question?.source == .hook
+                let transcriptQuestion: AgentQuestion? = {
+                    guard !hookOwned, let q = activity.question,
+                          !store.wasTranscriptQuestionAnswered(id, q) else { return nil }
+                    return q
+                }()
+                let newlySurfaced = transcriptQuestion != nil && existing.question != transcriptQuestion
+
                 store.update(id: id) { s in
                     s.title = title
                     // Keep the hook's precise terminal (from TERM_PROGRAM) if we have it;
                     // the transcript only knows cli vs IDE, not which terminal app.
                     if s.terminalBundleID == nil { s.terminal = terminal }
-                    s.lastMessage = activity.text
                     s.tokens = tokens
                     // Only update the model when this tail actually carried one; a chunk
                     // without an assistant turn shouldn't wipe a model we already know.
@@ -92,27 +106,45 @@ final class IdeWatcher {
                     // Only replace tasks when this scan actually found a TodoWrite; a tail
                     // that no longer contains one shouldn't wipe a list we already have.
                     if !activity.tasks.isEmpty { s.tasks = TaskList(items: activity.tasks) }
-                    // Don't override a pending permission/question or its waiting status.
-                    if s.permission == nil && s.question == nil {
-                        s.status = working ? .working : .idle
+
+                    if hookOwned {
+                        // The hook manages the question/permission lifecycle; just refresh activity.
+                        s.lastMessage = activity.text
+                    } else if let q = transcriptQuestion {
+                        s.question = q
+                        s.status = .asking
+                        s.lastMessage = q.summary
+                    } else {
+                        // No live transcript question — clear a stale transcript-sourced one.
+                        if s.question?.source == .transcript { s.question = nil }
+                        s.lastMessage = activity.text
+                        if s.permission == nil && s.question == nil {
+                            s.status = working ? .working : .idle
+                        }
                     }
                 }
+                if newlySurfaced { SoundPlayer.shared.play(.attention) }
             } else {
                 if store.demoMode { store.stopDemo(); store.clearAll() }
+                // A brand-new session nobody has pushed a hook question for: surface any
+                // pending transcript question directly.
+                let transcriptQuestion = activity.question
                 store.upsert(AgentSession(
                     id: id,
                     agent: .claude,
                     title: title,
                     terminal: terminal,
-                    lastMessage: activity.text,
-                    status: working ? .working : .idle,
+                    lastMessage: transcriptQuestion?.summary ?? activity.text,
+                    status: transcriptQuestion != nil ? .asking : (working ? .working : .idle),
                     startedAt: (try? c.url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? c.mtime,
                     updatedAt: c.mtime,
+                    question: transcriptQuestion,
                     tasks: TaskList(items: activity.tasks),
                     tokens: tokens,
                     model: activity.model,
                     workspacePath: activity.cwd,
                     transcriptURL: c.url))
+                if transcriptQuestion != nil { SoundPlayer.shared.play(.attention) }
             }
         }
         // Other agents (Grok, Copilot, …) discovered from their own history files.

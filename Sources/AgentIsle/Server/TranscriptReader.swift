@@ -10,6 +10,10 @@ enum TranscriptReader {
         var entrypoint: String?
         var model: String?
         var tasks: [AgentTask] = []
+        /// An unanswered `AskUserQuestion` found in the transcript, if any. Populated for
+        /// sessions we only see via polling (Desktop app, or hosts the hook can't reach),
+        /// so a question still surfaces even when no hook pushed it.
+        var question: AgentQuestion? = nil
     }
 
     /// Generic tail reader: walk the last chunk of a JSONL file newest-first and return
@@ -107,7 +111,66 @@ enum TranscriptReader {
         }
         return Activity(text: summary ?? "Session active",
                         branch: branch, cwd: cwd, entrypoint: entrypoint,
-                        model: model, tasks: tasks ?? [])
+                        model: model, tasks: tasks ?? [],
+                        question: pendingQuestion(in: lines))
+    }
+
+    /// Detects an unanswered `AskUserQuestion` in the transcript tail — the poll-path
+    /// equivalent of the hook's question interception. Walks oldest→newest tracking the
+    /// most recent `AskUserQuestion` tool_use and clearing it once a matching `tool_result`
+    /// (the answer) appears, so a question only survives while it's genuinely pending.
+    private static func pendingQuestion(in lines: [String]) -> AgentQuestion? {
+        var pendingID: String?
+        var pendingParts: [QuestionPart]?
+        for raw in lines {
+            guard let data = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let message = obj["message"] as? [String: Any],
+                  let blocks = message["content"] as? [[String: Any]] else { continue }
+            for block in blocks {
+                switch block["type"] as? String {
+                case "tool_use":
+                    if (block["name"] as? String) == "AskUserQuestion",
+                       let id = block["id"] as? String,
+                       let parts = questionParts(from: block["input"] as? [String: Any]) {
+                        pendingID = id
+                        pendingParts = parts
+                    }
+                case "tool_result":
+                    // The answer arrives as a tool_result referencing the ask's id.
+                    if let ref = block["tool_use_id"] as? String, ref == pendingID {
+                        pendingID = nil
+                        pendingParts = nil
+                    }
+                default:
+                    break
+                }
+            }
+        }
+        guard let parts = pendingParts else { return nil }
+        return AgentQuestion(parts: parts, source: .transcript)
+    }
+
+    /// Parses `AskUserQuestion`'s `questions` input into card parts. Mirrors the hook:
+    /// options come from each choice's `label`, and every question offers a free-text
+    /// answer (`allowsOther`) since the poll path can't gate on option-only replies.
+    private static func questionParts(from input: [String: Any]?) -> [QuestionPart]? {
+        guard let questions = input?["questions"] as? [[String: Any]] else { return nil }
+        let parts: [QuestionPart] = questions.enumerated().compactMap { idx, q in
+            let options = (q["options"] as? [[String: Any]] ?? [])
+                .compactMap { $0["label"] as? String }
+                .filter { !$0.isEmpty }
+            let header = (q["header"] as? String) ?? ""
+            let prompt = (q["question"] as? String) ?? header
+            guard !prompt.isEmpty || !options.isEmpty else { return nil }
+            return QuestionPart(id: idx,
+                                header: header,
+                                prompt: prompt.isEmpty ? "Choose an option" : prompt,
+                                options: options,
+                                multiSelect: (q["multiSelect"] as? Bool) ?? false,
+                                allowsOther: true)
+        }
+        return parts.isEmpty ? nil : parts
     }
 
     /// Extracts the todo list from a message's content if it contains a `TodoWrite`

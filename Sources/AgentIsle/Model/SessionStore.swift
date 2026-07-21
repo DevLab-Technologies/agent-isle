@@ -51,6 +51,12 @@ final class SessionStore: ObservableObject {
 
     private var demoTimer: Timer?
 
+    /// Transcript-detected questions the user has already answered, keyed by session.
+    /// The poller keeps seeing the pending `AskUserQuestion` in the JSONL until the agent
+    /// records its response, so this stops it from resurfacing (and re-chiming) the same
+    /// card in that window. Cleared once the transcript moves past the question.
+    private var answeredTranscriptQuestions: [UUID: AgentQuestion] = [:]
+
     // MARK: - Derived state
 
     /// Sessions ordered by how much they need attention.
@@ -116,6 +122,7 @@ final class SessionStore: ObservableObject {
         sessions.removeAll { $0.id == id }
         bypassedSessions.remove(id)
         alwaysAllowed[id] = nil
+        answeredTranscriptQuestions[id] = nil
         if id == openedSessionID { closeChat() }
     }
 
@@ -219,17 +226,53 @@ final class SessionStore: ObservableObject {
 
     /// Send the user's answer (one option, several joined options, or free text) back
     /// to the waiting agent. Ignores empty answers so a stray submit can't resolve it.
+    ///
+    /// Delivery depends on how the question reached us. A hook-pushed question has a
+    /// parked connection, so the answer replies straight to the blocked hook. A
+    /// transcript-detected question (Desktop app / no reachable hook) has no such channel,
+    /// so we type the answer into the session's host app — best-effort, the same terminal-
+    /// driving transport as in-notch chat, and it may not land in the Desktop app.
     func answerQuestion(sessionID: UUID, answer: String) {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: "; ")
+        let session = sessions.first { $0.id == sessionID }
+        let viaTranscript = session?.question?.source == .transcript
+        // Remember an answered transcript question so the poller doesn't resurface it.
+        if viaTranscript, let q = session?.question {
+            answeredTranscriptQuestions[sessionID] = q
+        }
         update(id: sessionID) { s in
             s.question = nil
             s.status = .working
             s.lastMessage = "You chose: \(oneLine)"
         }
         SoundPlayer.shared.play(.select)
-        EventServer.shared?.reply(sessionID: sessionID, decision: trimmed)
+        if viaTranscript, let session {
+            sendError = nil
+            MessageSender.send(trimmed, to: session) { [weak self] result in
+                if case .failure(let error) = result {
+                    self?.sendError = error.userMessage
+                    SoundPlayer.shared.play(.deny)
+                }
+            }
+        } else {
+            EventServer.shared?.reply(sessionID: sessionID, decision: trimmed)
+        }
+    }
+
+    /// True if `question` is one the user already answered for this session and the
+    /// transcript hasn't yet moved past it — the poller uses this to avoid resurfacing.
+    func wasTranscriptQuestionAnswered(_ sessionID: UUID, _ question: AgentQuestion) -> Bool {
+        answeredTranscriptQuestions[sessionID] == question
+    }
+
+    /// Forget the answered-marker once the transcript's pending question changes or clears,
+    /// so a genuinely new question later can surface again.
+    func reconcileAnsweredQuestion(_ sessionID: UUID, current: AgentQuestion?) {
+        if let answered = answeredTranscriptQuestions[sessionID], answered != current {
+            answeredTranscriptQuestions[sessionID] = nil
+        }
     }
 
     func acknowledge(sessionID: UUID) {

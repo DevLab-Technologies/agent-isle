@@ -177,15 +177,26 @@ struct QuestionPart: Equatable, Hashable, Identifiable {
 /// A question the agent is asking. Holds one or more parts, answered together and
 /// sent back in a single reply (matching how Claude's AskUserQuestion batches them).
 struct AgentQuestion: Equatable, Hashable {
-    var parts: [QuestionPart]
+    /// How the question reached us — which decides how an answer is delivered back.
+    enum Source: Equatable, Hashable {
+        case hook        // pushed by the PreToolUse hook; answer replies on its parked connection
+        case transcript  // discovered by polling the JSONL; answer is typed into the host app
+    }
 
-    init(parts: [QuestionPart]) { self.parts = parts }
+    var parts: [QuestionPart]
+    var source: Source
+
+    init(parts: [QuestionPart], source: Source = .hook) {
+        self.parts = parts
+        self.source = source
+    }
 
     /// Convenience for a single-part question (demo mode / simple producers).
     init(prompt: String, options: [String],
-         multiSelect: Bool = false, allowsOther: Bool = false) {
+         multiSelect: Bool = false, allowsOther: Bool = false, source: Source = .hook) {
         self.parts = [QuestionPart(id: 0, header: "", prompt: prompt, options: options,
                                    multiSelect: multiSelect, allowsOther: allowsOther)]
+        self.source = source
     }
 
     /// Short one-line summary for compact surfaces (collapsed island / lastMessage).
