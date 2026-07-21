@@ -18,6 +18,11 @@ final class ModelNameTests: XCTestCase {
         XCTAssertEqual(ModelName.pretty("claude-3-opus-20240229"), "Opus 3")
     }
 
+    func testClaudeDottedVersion() {
+        // An already-dotted version token is kept verbatim, not dropped.
+        XCTAssertEqual(ModelName.pretty("claude-opus-4.5"), "Opus 4.5")
+    }
+
     func testOpenAI() {
         XCTAssertEqual(ModelName.pretty("gpt-5.6"), "GPT-5.6")
         XCTAssertEqual(ModelName.pretty("gpt-5.6-codex"), "GPT-5.6 Codex")

@@ -40,6 +40,14 @@ enum ModelName {
         token.count >= 6 && token.allSatisfy(\.isNumber)
     }
 
+    /// A version token: digits (optionally already dotted, e.g. `4.5`), but not a date
+    /// stamp. Accepts both dash-delimited (`4`, `8`) and dotted (`4.5`) forms.
+    private static func isVersionToken(_ token: String) -> Bool {
+        guard !isDateStamp(token) else { return false }
+        return token.contains(where: \.isNumber)
+            && token.allSatisfy { $0.isNumber || $0 == "." }
+    }
+
     private static let noise: Set<String> = ["latest", "preview"]
 
     /// Title-case a word, but keep version-ish tokens (anything with a digit) verbatim
@@ -57,7 +65,7 @@ enum ModelName {
         let parts = tokens(id)
         let family = parts.compactMap { families[$0] }.first ?? "Claude"
         let version = parts
-            .filter { $0.allSatisfy(\.isNumber) && !isDateStamp($0) }
+            .filter(isVersionToken)
             .joined(separator: ".")
         return version.isEmpty ? family : "\(family) \(version)"
     }

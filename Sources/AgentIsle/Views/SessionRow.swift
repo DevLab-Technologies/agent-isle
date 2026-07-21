@@ -81,7 +81,6 @@ struct SessionRow: View {
                             .padding(.horizontal, 5).padding(.vertical, 2)
                             .background(Capsule().fill(session.agent.tint.opacity(0.12)))
                             .lineLimit(1)
-                            .fixedSize()
                     }
                     if settings.showTerminal {
                         Text(session.terminal)
