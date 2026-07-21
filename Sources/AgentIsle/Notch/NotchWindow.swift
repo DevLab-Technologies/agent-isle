@@ -15,7 +15,11 @@ final class NotchWindow: NSPanel {
     private var hosting: NSHostingView<AnyView>?
     private var cancellable: AnyCancellable?
     private var chatCancellable: AnyCancellable?
+    private var hoverCancellable: AnyCancellable?
     private var mouseMonitors: [Any] = []
+    /// Polls the pointer while hovering; catches exits through the window's dead zone
+    /// (see `startHoverPolling`).
+    private var hoverPoll: Timer?
 
     // The window is a FIXED size large enough for the expanded island and never
     // resizes — resizing on hover caused mouse-tracking flicker near the notch.
@@ -78,10 +82,21 @@ final class NotchWindow: NSPanel {
             }
 
         startPointerMonitoring()
+
+        // Poll the pointer only while hovering, to catch the exit. The move monitors
+        // above don't fire in the window's "dead zone" — the fixed panel is far larger
+        // than the island, and `PassthroughView.hitTest` returns nil off the island, so
+        // the pointer sitting there (off the island but inside the window) sends us no
+        // mouse-moved events and the global monitor doesn't fire either. Without this the
+        // island stays expanded until the pointer leaves the whole fixed window.
+        hoverCancellable = store.$isHovering
+            .removeDuplicates()
+            .sink { [weak self] hovering in self?.startHoverPolling(hovering) }
     }
 
     deinit {
         for monitor in mouseMonitors { NSEvent.removeMonitor(monitor) }
+        hoverPoll?.invalidate()
     }
 
     /// Drive the island's hover state from the real pointer location instead of
@@ -97,6 +112,21 @@ final class NotchWindow: NSPanel {
         }
         mouseMonitors = [global, local].compactMap { $0 }
         syncHoverToPointer()
+    }
+
+    /// Start/stop a lightweight pointer poll for the duration of a hover. The poll runs
+    /// only while `isHovering` is true, so there's no cost when the island is idle; it
+    /// stops as soon as the collapse it triggers lands.
+    private func startHoverPolling(_ hovering: Bool) {
+        hoverPoll?.invalidate()
+        hoverPoll = nil
+        guard hovering else { return }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.syncHoverToPointer()
+        }
+        // .common so it keeps firing during scrolls/tracking runloop modes.
+        RunLoop.main.add(timer, forMode: .common)
+        hoverPoll = timer
     }
 
     private func syncHoverToPointer() {

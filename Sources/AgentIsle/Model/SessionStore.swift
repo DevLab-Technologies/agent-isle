@@ -84,14 +84,22 @@ final class SessionStore: ObservableObject {
 
     /// Report whether the pointer is inside the island. Entry applies immediately;
     /// exit is debounced slightly so brief tracking drops near the notch don't flicker.
+    ///
+    /// Exit is idempotent: while a collapse is already scheduled, further "outside"
+    /// reports are ignored rather than rescheduling it. This lets a caller poll the
+    /// pointer (every frame) without the deadline being pushed back on every tick — which
+    /// would otherwise mean the island never actually collapses.
     func setHovering(_ inside: Bool) {
-        hoverCollapseWork?.cancel()
-        hoverCollapseWork = nil
         if inside {
+            hoverCollapseWork?.cancel()
+            hoverCollapseWork = nil
             if !isHovering { isHovering = true }
         } else {
-            guard isHovering else { return }
-            let work = DispatchWorkItem { [weak self] in self?.isHovering = false }
+            guard isHovering, hoverCollapseWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                self?.hoverCollapseWork = nil
+                self?.isHovering = false
+            }
             hoverCollapseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
         }
