@@ -1,7 +1,7 @@
 # Agent Isle
 
 [![build](https://github.com/DevLab-Technologies/agent-isle/actions/workflows/build.yml/badge.svg)](https://github.com/DevLab-Technologies/agent-isle/actions/workflows/build.yml)
-[![Latest release](https://img.shields.io/github/v/release/DevLab-Technologies/agent-isle?sort=semver)](https://github.com/DevLab-Technologies/agent-isle/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/DevLab-Technologies/agent-isle)](https://github.com/DevLab-Technologies/agent-isle/releases/latest)
 [![Total downloads](https://img.shields.io/github/downloads/DevLab-Technologies/agent-isle/total.svg)](https://github.com/DevLab-Technologies/agent-isle/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
 ![Platform: macOS 14+](https://img.shields.io/badge/Platform-macOS%2014%2B-lightgrey.svg)
@@ -41,9 +41,15 @@ Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB R
 ## Download
 
 Grab the latest prebuilt app from the [Releases page](https://github.com/DevLab-Technologies/agent-isle/releases/latest)
-— the current release is **v1.3**. Download `Agent-Isle.zip`, unzip it, and drag
-**Agent Isle.app** to `/Applications`. Across all releases the app has been downloaded
-**50+ times**.
+(see the version and total-downloads badges above). Download `Agent-Isle.zip`, unzip it,
+and drag **Agent Isle.app** to `/Applications`.
+
+If the release isn't notarized, macOS Gatekeeper blocks the first launch. Either
+right-click the app and choose **Open**, or clear the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Agent Isle.app"
+```
 
 Prefer to build from source? See [Build & run](#build--run) below.
 
