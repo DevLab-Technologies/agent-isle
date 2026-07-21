@@ -38,21 +38,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Task { @MainActor [weak self] in self?.scheduleGeometryRefresh() }
             }
 
-        // Start the local event server so real agents can push updates.
-        EventServer.shared = EventServer(store: store)
-        EventServer.shared?.start()
-
         // Discover real sessions (local Claude Code + Grok/Copilot). No demo data by
         // default — a fresh install should never show fake sessions. Demo is opt-in
         // from the gear menu.
         // Dev/marketing: `AGENT_ISLE_DEMO=1` opens the island expanded with demo data so
         // the panel can be captured without wiring up a real agent. In this mode we skip
-        // the live watcher (which would otherwise replace the demo with real sessions)
-        // and the hook prompt.
+        // the event server and live watcher (which would otherwise replace the demo with
+        // real sessions) and the hook prompt.
         let demoLaunch = ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] == "1"
+
+        // Start the local event server so real agents can push updates.
+        if !demoLaunch {
+            EventServer.shared = EventServer(store: store)
+            EventServer.shared?.start()
+        }
+
         if demoLaunch {
             store.startDemo()
             store.isExpanded = true
+            // Sit above any other notch app (e.g. an installed build) for a clean capture.
+            window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 2)
         } else {
             ideWatcher = IdeWatcher(store: store)
             ideWatcher?.start()

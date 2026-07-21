@@ -23,9 +23,6 @@ final class SessionStore: ObservableObject {
     /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.
     @Published var islandSize: CGSize = CGSize(width: 520, height: 64)
 
-    /// Which sessions the expanded list shows (the footer tabs).
-    @Published var filter: SessionFilter = .all
-
     // MARK: - Live chat
 
     /// The session whose full conversation is currently open, or nil for the list view.
@@ -64,11 +61,6 @@ final class SessionStore: ObservableObject {
             }
             return a.updatedAt > b.updatedAt
         }
-    }
-
-    /// Sessions shown in the list, honoring the current footer filter.
-    var visibleSessions: [AgentSession] {
-        orderedSessions.filter { filter.matches($0) }
     }
 
     /// The session the collapsed island should surface first.
@@ -122,11 +114,15 @@ final class SessionStore: ObservableObject {
 
     func remove(id: UUID) {
         sessions.removeAll { $0.id == id }
+        bypassedSessions.remove(id)
+        alwaysAllowed[id] = nil
         if id == openedSessionID { closeChat() }
     }
 
     func clearAll() {
         sessions.removeAll()
+        bypassedSessions.removeAll()
+        alwaysAllowed.removeAll()
         if openedSessionID != nil { closeChat() }
     }
 
@@ -182,14 +178,40 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Permission decisions
 
-    func resolvePermission(sessionID: UUID, allow: Bool) {
+    /// Sessions the user chose to "Bypass" — every later request auto-approves.
+    private var bypassedSessions: Set<UUID> = []
+    /// Per-session "Always Allow" signatures (see `PermissionRequest.allowKey`).
+    private var alwaysAllowed: [UUID: Set<String>] = [:]
+
+    /// Whether a freshly-arrived request should be auto-approved without a card, because
+    /// the user previously chose Bypass for the session or Always-Allow for this signature.
+    func isAutoAllowed(sessionID: UUID, key: String) -> Bool {
+        bypassedSessions.contains(sessionID) || (alwaysAllowed[sessionID]?.contains(key) ?? false)
+    }
+
+    func resolvePermission(sessionID: UUID, decision: PermissionDecision) {
+        // Remember the choice so future prompts in this session can auto-answer.
+        if decision == .bypass { bypassedSessions.insert(sessionID) }
+        if decision == .always, let key = sessions.first(where: { $0.id == sessionID })?.permission?.allowKey {
+            alwaysAllowed[sessionID, default: []].insert(key)
+        }
+        let allow = decision != .deny
         update(id: sessionID) { s in
             s.permission = nil
             s.status = allow ? .working : .idle
-            s.lastMessage = allow ? "Approved — continuing" : "Denied by user"
+            s.lastMessage = message(for: decision)
         }
         SoundPlayer.shared.play(allow ? .approve : .deny)
-        EventServer.shared?.reply(sessionID: sessionID, decision: allow ? "allow" : "deny")
+        EventServer.shared?.reply(sessionID: sessionID, decision: decision.wireValue)
+    }
+
+    private func message(for decision: PermissionDecision) -> String {
+        switch decision {
+        case .deny:      return "Denied by user"
+        case .allowOnce: return "Approved — continuing"
+        case .always:    return "Always allowing this action"
+        case .bypass:    return "Bypassing approvals for this session"
+        }
     }
 
     func answerQuestion(sessionID: UUID, option: String) {

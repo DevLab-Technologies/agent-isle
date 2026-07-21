@@ -106,6 +106,18 @@ final class EventServer {
                                             diffAdded: event.added ?? 0,
                                             diffRemoved: event.removed ?? 0)
             request.previewLines = (event.diff ?? []).map { $0.toDiffLine() }
+
+            // Honor a prior "Always Allow" / "Bypass" for this session: approve silently,
+            // without a card, sound, or parking the hook.
+            if store.isAutoAllowed(sessionID: sessionID, key: request.allowKey) {
+                store.update(id: sessionID) { s in
+                    s.status = .working
+                    s.lastMessage = "Auto-approved \(request.toolName)"
+                }
+                respond(on: conn, json: #"{"ok":true,"decision":"allow"}"#)
+                return
+            }
+
             // Attach to the session the scanner already tracks, if present, so we
             // decorate the existing row instead of creating a duplicate.
             if store.sessions.contains(where: { $0.id == sessionID }) {

@@ -40,12 +40,18 @@ struct PermissionCard: View {
                 diffPreview
             }
 
-            HStack(spacing: 8) {
-                actionButton("Deny", shortcut: "⌘N", tint: Palette.deny) {
-                    store.resolvePermission(sessionID: session.id, allow: false)
+            HStack(spacing: 6) {
+                decisionButton("Deny", style: .deny) {
+                    store.resolvePermission(sessionID: session.id, decision: .deny)
                 }
-                actionButton("Allow", shortcut: "⌘Y", tint: Palette.allow, filled: true) {
-                    store.resolvePermission(sessionID: session.id, allow: true)
+                decisionButton("Allow Once", style: .neutral) {
+                    store.resolvePermission(sessionID: session.id, decision: .allowOnce)
+                }
+                decisionButton("Always Allow", style: .accent) {
+                    store.resolvePermission(sessionID: session.id, decision: .always)
+                }
+                decisionButton("Bypass", style: .danger) {
+                    store.resolvePermission(sessionID: session.id, decision: .bypass)
                 }
             }
         }
@@ -102,27 +108,44 @@ struct PermissionCard: View {
         }
     }
 
-    private func actionButton(_ title: String, shortcut: String, tint: Color,
-                              filled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Text(title)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                Text(shortcut)
-                    .font(.system(size: 9, design: .monospaced))
-                    .opacity(0.6)
+    /// Visual treatments for the four decision buttons.
+    private enum DecisionStyle {
+        case deny       // outline, red text
+        case neutral    // white fill (the safe, common "allow once")
+        case accent     // blue fill ("always allow")
+        case danger     // red fill ("bypass" — the far-reaching choice)
+
+        var fill: Color {
+            switch self {
+            case .deny:    return Palette.deny.opacity(0.12)
+            case .neutral: return .white.opacity(0.92)
+            case .accent:  return SessionStatus.working.color
+            case .danger:  return Palette.deny
             }
-            .foregroundStyle(filled ? .black : tint)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(filled ? tint : tint.opacity(0.12))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(tint.opacity(filled ? 0 : 0.4), lineWidth: 0.5)
-            )
+        }
+        var foreground: Color {
+            switch self {
+            case .deny:    return Palette.deny
+            case .neutral, .accent, .danger: return self == .neutral ? .black : .white
+            }
+        }
+        var stroke: Color {
+            self == .deny ? Palette.deny.opacity(0.4) : .clear
+        }
+    }
+
+    private func decisionButton(_ title: String, style: DecisionStyle,
+                                action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(style.foreground)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7).padding(.horizontal, 4)
+                .background(RoundedRectangle(cornerRadius: 8).fill(style.fill))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(style.stroke, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
     }

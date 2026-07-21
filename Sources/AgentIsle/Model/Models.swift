@@ -1,20 +1,5 @@
 import SwiftUI
 
-/// The footer tabs that filter the session list.
-enum SessionFilter {
-    case all        // Monitor — everything
-    case approve    // Approve — sessions waiting on a permission
-    case ask        // Ask — sessions asking a question
-
-    func matches(_ s: AgentSession) -> Bool {
-        switch self {
-        case .all: return true
-        case .approve: return s.status == .waiting
-        case .ask: return s.status == .asking
-        }
-    }
-}
-
 /// Shared UI colors used outside the status enum.
 enum Palette {
     static let deny = Color(red: 0.95, green: 0.42, blue: 0.42)
@@ -128,6 +113,18 @@ enum SessionStatus: String, Codable {
     }
 }
 
+/// How the user resolved a permission request.
+enum PermissionDecision {
+    case deny         // block this one
+    case allowOnce    // allow just this call
+    case always       // allow this call, and auto-allow matching requests for the session
+    case bypass       // allow this call, and auto-allow *everything* for the session
+
+    /// What we echo back to the hook — Claude Code only understands allow/deny; the
+    /// "always"/"bypass" memory lives on the Agent Isle side (auto-answering later prompts).
+    var wireValue: String { self == .deny ? "deny" : "allow" }
+}
+
 /// A pending permission request (e.g. an edit or command the agent wants to run).
 struct PermissionRequest: Identifiable, Equatable {
     let id: UUID
@@ -153,6 +150,10 @@ struct PermissionRequest: Identifiable, Equatable {
         self.diffRemoved = diffRemoved
         self.previewLines = previewLines
     }
+
+    /// Signature used by "Always Allow": the tool, plus the command for Bash so remembering
+    /// is per-command (a bare tool like Edit remembers the whole tool for the session).
+    var allowKey: String { "\(toolName)|\(command ?? "")" }
 }
 
 struct DiffLine: Identifiable, Equatable {
