@@ -25,6 +25,9 @@ final class IdeWatcher {
     private var trackedIDs: Set<UUID> = []
     /// Cache of token totals keyed by session id, invalidated when the file changes.
     private var tokenCache: [String: (mtime: Date, tokens: Int)] = [:]
+    /// Cache of sub-agent task/activity keyed by agent id, so each poll re-reads a
+    /// sub-agent file only when it actually changed. Pruned to live agents each scan.
+    private var subAgentCache: [String: TranscriptReader.SubAgentCache] = [:]
 
     init(store: SessionStore) {
         self.store = store
@@ -60,6 +63,7 @@ final class IdeWatcher {
         guard !candidates.isEmpty else { pruneMissing(current: []); return }
 
         var found: Set<UUID> = []
+        var liveSubAgentIDs: Set<String> = []
         for c in candidates {
             let activity = TranscriptReader.latestActivity(in: c.url)
             let source = SessionSource(entrypoint: activity.entrypoint)
@@ -81,7 +85,9 @@ final class IdeWatcher {
             let subDir = c.url.deletingPathExtension().appendingPathComponent("subagents")
             let subs = TranscriptReader.subAgents(inDir: subDir,
                                                   activeWindow: activeWindow,
-                                                  workingWindow: workingWindow)
+                                                  workingWindow: workingWindow,
+                                                  cache: &subAgentCache)
+            liveSubAgentIDs.formUnion(subs.map(\.id))
             let working = Date().timeIntervalSince(c.mtime) < workingWindow
                 || subs.contains { $0.working }
 
@@ -158,6 +164,10 @@ final class IdeWatcher {
                 if transcriptQuestion != nil { SoundPlayer.shared.play(.attention) }
             }
         }
+        // Forget cached sub-agents that are no longer active, so the cache can't grow
+        // without bound as sub-agents come and go. (Cache is tiny — at most
+        // maxSessions × the per-session cap — so filtering every scan is cheap.)
+        subAgentCache = subAgentCache.filter { liveSubAgentIDs.contains($0.key) }
         // Other agents (Grok, Copilot, …) discovered from their own history files.
         for e in ExternalAgents.scanAll(activeWindow: activeWindow, maxPerAgent: 5) {
             found.insert(e.id)

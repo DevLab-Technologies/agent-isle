@@ -45,11 +45,21 @@ enum TranscriptReader {
 
     // MARK: - Sub-agents
 
+    /// The expensive-to-read bits of a sub-agent transcript, cached across polls: the
+    /// immutable spawn task (read once) and the latest activity (re-read only when the
+    /// file changes). Keyed by agent id in the caller's cache.
+    struct SubAgentCache { var mtime: Date; var title: String; var lastMessage: String }
+
     /// Discover a session's active background sub-agents. Claude Code writes each one to
     /// `<session-id>/subagents/agent-*.jsonl` (a sidechain), so while the parent waits its
-    /// own transcript is quiet and these are the only sign of progress.
-    static func subAgents(inDir dir: URL, activeWindow: TimeInterval,
-                          workingWindow: TimeInterval, max: Int = 8) -> [SubAgent] {
+    /// own transcript is quiet and these are the only sign of progress. Only the session's
+    /// direct sub-agents are surfaced (not a sub-agent's own nested sub-agents).
+    ///
+    /// `cache` avoids re-reading each file every poll: the task is read once (immutable),
+    /// and the activity line is re-read only when the file's mtime changes. The `working`
+    /// flag is always recomputed from the current time, so it stays live without I/O.
+    static func subAgents(inDir dir: URL, activeWindow: TimeInterval, workingWindow: TimeInterval,
+                          max: Int = 8, cache: inout [String: SubAgentCache]) -> [SubAgent] {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
         let now = Date()
@@ -64,11 +74,19 @@ enum TranscriptReader {
             .prefix(max)
             .map { $0 }
         return recent.map { entry in
-            SubAgent(id: entry.url.deletingPathExtension().lastPathComponent,
-                     title: firstUserText(in: entry.url) ?? "Sub-agent",
-                     lastMessage: activityLine(in: entry.url),
-                     working: now.timeIntervalSince(entry.mtime) < workingWindow,
-                     updatedAt: entry.mtime)
+            let id = entry.url.deletingPathExtension().lastPathComponent
+            let title: String
+            let lastMessage: String
+            if let hit = cache[id], hit.mtime == entry.mtime {
+                title = hit.title; lastMessage = hit.lastMessage   // file unchanged — no I/O
+            } else {
+                title = cache[id]?.title ?? (firstUserText(in: entry.url) ?? "Sub-agent")
+                lastMessage = activityLine(in: entry.url)
+                cache[id] = SubAgentCache(mtime: entry.mtime, title: title, lastMessage: lastMessage)
+            }
+            return SubAgent(id: id, title: title, lastMessage: lastMessage,
+                            working: now.timeIntervalSince(entry.mtime) < workingWindow,
+                            updatedAt: entry.mtime)
         }
     }
 

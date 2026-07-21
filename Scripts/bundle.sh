@@ -39,7 +39,9 @@ cp "$BIN" "$CONTENTS/MacOS/AgentIsle"
 cp "$ROOT/Sources/AgentIsle/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 cp "$ROOT/Scripts/agent-isle-hook.py" "$CONTENTS/Resources/agent-isle-hook.py"
 
-cat > "$CONTENTS/Info.plist" <<PLIST
+# Quoted heredoc (no shell interpolation) — the version is stamped in afterward via
+# PlistBuddy so nothing in the plist can be accidentally expanded by the shell.
+cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -49,8 +51,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.devlab.agentisle</string>
   <key>CFBundleExecutable</key><string>AgentIsle</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+  <key>CFBundleVersion</key><string>0.0</string>
+  <key>CFBundleShortVersionString</key><string>0.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
@@ -58,5 +60,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+/usr/libexec/PlistBuddy -c "Set CFBundleVersion $VERSION" "$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Set CFBundleShortVersionString $VERSION" "$CONTENTS/Info.plist"
 
 echo "Built: $APP ($VERSION)"
