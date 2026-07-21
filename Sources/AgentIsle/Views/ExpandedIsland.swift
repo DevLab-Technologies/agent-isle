@@ -76,6 +76,7 @@ struct ExpandedIsland: View {
             Button(store.demoMode ? "Stop Demo Mode" : "Start Demo Mode") {
                 store.demoMode ? store.stopDemo() : store.startDemo()
             }
+            Toggle("Sound Alerts", isOn: $settings.soundEnabled)
             if HookInstaller.hasClaudeCode() {
                 Divider()
                 if HookInstaller.isInstalled() {
@@ -83,6 +84,7 @@ struct ExpandedIsland: View {
                 } else {
                     Button("Install Claude Code Hooks…") { HookInstaller.install() }
                 }
+                Button("Copy Claude Code Hook Command") { copyHookCommand() }
             }
             if CursorHookInstaller.hasCursor() {
                 if !HookInstaller.hasClaudeCode() { Divider() }
@@ -108,6 +110,15 @@ struct ExpandedIsland: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .frame(width: 18)
+    }
+
+    /// Put the curl one-liner agents can POST events to on the pasteboard (mirrors the
+    /// menu-bar item's old "Copy Hook Command").
+    private func copyHookCommand() {
+        let cmd = "curl -s -X POST http://localhost:\(EventServer.port)/event " +
+                  "-H 'Content-Type: application/json' -d @-"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(cmd, forType: .string)
     }
 
     private var sessionList: some View {

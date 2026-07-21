@@ -6,6 +6,28 @@ import ServiceManagement
 enum DefaultsKeys {
     static let notchWidthAdjust = "notchWidthAdjust"
     static let notchHeightAdjust = "notchHeightAdjust"
+    static let displayMode = "displayMode"
+}
+
+/// Where the island surfaces itself. Notched Macs default to `.notch`; everything else
+/// (notchless laptops, external displays) defaults to `.menuBar`, where clicking the
+/// menu-bar item opens the full session panel.
+enum DisplayMode: String, CaseIterable, Identifiable {
+    case notch, menuBar, both
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .notch:   return "Notch Island"
+        case .menuBar: return "Menu Bar Panel"
+        case .both:    return "Both"
+        }
+    }
+
+    /// True when the notch/pill island window should be shown.
+    var showsNotch: Bool { self == .notch || self == .both }
+    /// True when the menu-bar status item should open the session panel popover.
+    var showsMenuBar: Bool { self == .menuBar || self == .both }
 }
 
 /// User preferences, persisted to `UserDefaults` and observed by the views and the
@@ -54,6 +76,15 @@ final class AppSettings: ObservableObject {
     @Published var maxPanelWidth: Double { didSet { d.set(maxPanelWidth, forKey: Key.maxPanelWidth) } }
     @Published var maxPanelHeight: Double { didSet { d.set(maxPanelHeight, forKey: Key.maxPanelHeight) } }
 
+    /// Which surface(s) the island uses. Resolved on first run from the hardware (see
+    /// `init`); changing it reconfigures the live surfaces via `.agentIsleDisplayModeChanged`.
+    @Published var displayMode: DisplayMode {
+        didSet {
+            d.set(displayMode.rawValue, forKey: Key.displayMode)
+            NotificationCenter.default.post(name: .agentIsleDisplayModeChanged, object: nil)
+        }
+    }
+
     private enum Key {
         static let soundEnabled = "soundEnabled"
         static let soundVolume = "soundVolume"
@@ -68,6 +99,7 @@ final class AppSettings: ObservableObject {
         static let notchHeightAdjust = DefaultsKeys.notchHeightAdjust
         static let maxPanelWidth = "maxPanelWidth"
         static let maxPanelHeight = "maxPanelHeight"
+        static let displayMode = DefaultsKeys.displayMode
     }
 
     private init() {
@@ -100,6 +132,15 @@ final class AppSettings: ObservableObject {
         maxPanelWidth = d.double(forKey: Key.maxPanelWidth)
         maxPanelHeight = d.double(forKey: Key.maxPanelHeight)
 
+        // Resolve the display mode on first run from the hardware: a physical notch gets
+        // the notch island, everything else (notchless laptops, external displays) starts
+        // in menu-bar panel mode. After first run the stored choice always wins.
+        if d.string(forKey: Key.displayMode) == nil {
+            let resolved: DisplayMode = NotchGeometry.current().hasHardwareNotch ? .notch : .menuBar
+            d.set(resolved.rawValue, forKey: Key.displayMode)
+        }
+        displayMode = DisplayMode(rawValue: d.string(forKey: Key.displayMode) ?? "") ?? .notch
+
         // Push initial sound prefs into the player (didSet doesn't fire during init).
         SoundPlayer.shared.enabled = soundEnabled
         SoundPlayer.shared.volume = soundVolume
@@ -117,6 +158,9 @@ extension Notification.Name {
     static let agentIsleGeometryChanged = Notification.Name("AgentIsleGeometryChanged")
     /// Posted from the island's gear menu to open the settings window.
     static let openAgentIsleSettings = Notification.Name("OpenAgentIsleSettings")
+    /// Posted when the user picks a different display mode; the app reconfigures its
+    /// surfaces (notch window visibility + menu-bar status item behavior).
+    static let agentIsleDisplayModeChanged = Notification.Name("AgentIsleDisplayModeChanged")
 }
 
 /// Thin wrapper over `SMAppService` for the "Launch at Login" toggle. In a packaged
