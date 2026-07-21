@@ -51,11 +51,15 @@ final class SessionStore: ObservableObject {
 
     private var demoTimer: Timer?
 
-    /// Transcript-detected questions the user has already answered, keyed by session.
-    /// The poller keeps seeing the pending `AskUserQuestion` in the JSONL until the agent
-    /// records its response, so this stops it from resurfacing (and re-chiming) the same
-    /// card in that window. Cleared once the transcript moves past the question.
-    private var answeredTranscriptQuestions: [UUID: AgentQuestion] = [:]
+    /// Transcript-detected questions the user has already answered, with when they did,
+    /// keyed by session. The poller keeps seeing the pending `AskUserQuestion` in the JSONL
+    /// until the agent records its response, so this stops it from resurfacing (and
+    /// re-chiming) the same card in that window. Cleared once the transcript moves past the
+    /// question, or once the grace window lapses (see `wasTranscriptQuestionAnswered`).
+    private var answeredTranscriptQuestions: [UUID: (question: AgentQuestion, at: Date)] = [:]
+    /// How long an answered transcript question stays suppressed before it may resurface
+    /// (in case a best-effort answer never reached the agent). `var` so tests can adjust it.
+    var answeredQuestionGrace: TimeInterval = 8
 
     // MARK: - Derived state
 
@@ -246,19 +250,22 @@ final class SessionStore: ObservableObject {
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: "; ")
         let session = sessions.first { $0.id == sessionID }
         let viaTranscript = session?.question?.source == .transcript
-        // Remember an answered transcript question so the poller doesn't resurface it.
+        // Remember an answered transcript question so the poller doesn't resurface it
+        // while the answer is in flight.
         if viaTranscript, let q = session?.question {
-            answeredTranscriptQuestions[sessionID] = q
+            noteAnsweredTranscriptQuestion(sessionID, q)
         }
         update(id: sessionID) { s in
             s.question = nil
             s.status = .working
-            s.lastMessage = "You chose: \(oneLine)"
+            s.lastMessage = viaTranscript ? "Sent to \(s.terminal): \(oneLine)" : "You chose: \(oneLine)"
         }
         SoundPlayer.shared.play(.select)
         if viaTranscript, let session {
             sendError = nil
-            MessageSender.send(trimmed, to: session) { [weak self] result in
+            // Deliver the flattened one-line form (MessageSender flattens too, but keep
+            // what we typed identical to what we recorded as the session's last message).
+            MessageSender.send(oneLine, to: session) { [weak self] result in
                 if case .failure(let error) = result {
                     self?.sendError = error.userMessage
                     SoundPlayer.shared.play(.deny)
@@ -269,16 +276,28 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    /// True if `question` is one the user already answered for this session and the
-    /// transcript hasn't yet moved past it — the poller uses this to avoid resurfacing.
+    /// Record that the user answered a transcript-detected question, with the time it
+    /// happened. Extracted so the poller-suppression logic is unit-testable without
+    /// driving the real message transport.
+    func noteAnsweredTranscriptQuestion(_ sessionID: UUID, _ question: AgentQuestion) {
+        answeredTranscriptQuestions[sessionID] = (question, Date())
+    }
+
+    /// True if `question` is one the user answered for this session recently enough that
+    /// the transcript may not reflect it yet — the poller uses this to avoid resurfacing
+    /// (and re-chiming) it. The grace window is deliberately short: if delivery didn't
+    /// actually land (best-effort typing into the Desktop app), the question resurfaces
+    /// afterward so the user sees it's still waiting rather than silently swallowed.
     func wasTranscriptQuestionAnswered(_ sessionID: UUID, _ question: AgentQuestion) -> Bool {
-        answeredTranscriptQuestions[sessionID] == question
+        guard let marker = answeredTranscriptQuestions[sessionID], marker.question == question
+        else { return false }
+        return Date().timeIntervalSince(marker.at) < answeredQuestionGrace
     }
 
     /// Forget the answered-marker once the transcript's pending question changes or clears,
     /// so a genuinely new question later can surface again.
     func reconcileAnsweredQuestion(_ sessionID: UUID, current: AgentQuestion?) {
-        if let answered = answeredTranscriptQuestions[sessionID], answered != current {
+        if let marker = answeredTranscriptQuestions[sessionID], marker.question != current {
             answeredTranscriptQuestions[sessionID] = nil
         }
     }

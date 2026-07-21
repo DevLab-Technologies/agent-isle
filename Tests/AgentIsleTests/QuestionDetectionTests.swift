@@ -81,6 +81,40 @@ final class QuestionDetectionTests: XCTestCase {
         XCTAssertNil(TranscriptReader.latestActivity(in: url).question)
     }
 
+    func testResolvedByLaterAssistantTurnWithoutToolResult() throws {
+        // Some hosts may not record a matching tool_result; a later assistant turn still
+        // means the agent moved on, so the question is no longer pending.
+        let ask = try askLine(id: "toolu_1", questions: [
+            (header: "A", question: "Proceed?", options: ["Yes", "No"], multiSelect: false),
+        ])
+        let continued = #"{"type":"assistant","message":{"content":[{"type":"text","text":"Great, proceeding."}]}}"#
+        let url = try writeLines([ask, continued])
+
+        XCTAssertNil(TranscriptReader.latestActivity(in: url).question)
+    }
+
+    func testResolvedByLaterHumanPrompt() throws {
+        let ask = try askLine(id: "toolu_1", questions: [
+            (header: "A", question: "Proceed?", options: ["Yes", "No"], multiSelect: false),
+        ])
+        let humanPrompt = #"{"type":"user","message":{"content":"actually do something else"}}"#
+        let url = try writeLines([ask, humanPrompt])
+
+        XCTAssertNil(TranscriptReader.latestActivity(in: url).question)
+    }
+
+    func testAttachmentAfterAskDoesNotResolve() throws {
+        // Meta rows (attachments, system notices) between the ask and its answer must not
+        // be mistaken for the agent continuing — the question is still pending.
+        let ask = try askLine(id: "toolu_1", questions: [
+            (header: "A", question: "Proceed?", options: ["Yes", "No"], multiSelect: false),
+        ])
+        let attachment = #"{"type":"attachment","message":{"content":"[image attached]"}}"#
+        let url = try writeLines([ask, attachment])
+
+        XCTAssertNotNil(TranscriptReader.latestActivity(in: url).question)
+    }
+
     // MARK: - Helpers
 
     /// Builds one assistant transcript line carrying an AskUserQuestion tool call.

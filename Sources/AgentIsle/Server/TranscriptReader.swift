@@ -119,36 +119,52 @@ enum TranscriptReader {
     /// equivalent of the hook's question interception. Walks oldest→newest tracking the
     /// most recent `AskUserQuestion` tool_use and clearing it once a matching `tool_result`
     /// (the answer) appears, so a question only survives while it's genuinely pending.
+    ///
+    /// A pending ask is the *last* thing in the conversation — the agent is blocked on it.
+    /// So it's also treated as resolved if anything meaningful follows it: a matching
+    /// `tool_result`, a later assistant turn, or a human prompt. That guards against hosts
+    /// that record the answer as a plain continuation rather than a tool_result (otherwise
+    /// the card could linger forever with no way to clear it).
     private static func pendingQuestion(in lines: [String]) -> AgentQuestion? {
-        var pendingID: String?
-        var pendingParts: [QuestionPart]?
+        // Parse the real turns (skip meta rows: attachments, system notices, etc.).
+        struct Turn { let role: String; let blocks: [[String: Any]]; let text: String? }
+        var turns: [Turn] = []
         for raw in lines {
             guard let data = raw.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let message = obj["message"] as? [String: Any],
-                  let blocks = message["content"] as? [[String: Any]] else { continue }
-            for block in blocks {
-                switch block["type"] as? String {
-                case "tool_use":
-                    if (block["name"] as? String) == "AskUserQuestion",
-                       let id = block["id"] as? String,
-                       let parts = questionParts(from: block["input"] as? [String: Any]) {
-                        pendingID = id
-                        pendingParts = parts
-                    }
-                case "tool_result":
-                    // The answer arrives as a tool_result referencing the ask's id.
-                    if let ref = block["tool_use_id"] as? String, ref == pendingID {
-                        pendingID = nil
-                        pendingParts = nil
-                    }
-                default:
-                    break
+                  let type = obj["type"] as? String, type == "user" || type == "assistant",
+                  let message = obj["message"] as? [String: Any] else { continue }
+            if let blocks = message["content"] as? [[String: Any]] {
+                turns.append(Turn(role: type, blocks: blocks, text: nil))
+            } else if let str = message["content"] as? String {
+                turns.append(Turn(role: type, blocks: [], text: str))
+            }
+        }
+
+        // Find the most recent AskUserQuestion tool_use.
+        var askIndex: Int?
+        var parts: [QuestionPart]?
+        for (i, turn) in turns.enumerated() where turn.role == "assistant" {
+            for block in turn.blocks where (block["type"] as? String) == "tool_use"
+                && (block["name"] as? String) == "AskUserQuestion" {
+                if let p = questionParts(from: block["input"] as? [String: Any]) {
+                    askIndex = i
+                    parts = p
                 }
             }
         }
-        guard let parts = pendingParts else { return nil }
-        return AgentQuestion(parts: parts, source: .transcript)
+        guard let idx = askIndex, let parts else { return nil }
+
+        // Pending only if nothing meaningful comes after the ask.
+        let continued = turns[(idx + 1)...].contains { turn in
+            if let text = turn.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return true
+            }
+            return turn.blocks.contains {
+                ["text", "tool_use", "tool_result"].contains($0["type"] as? String ?? "")
+            }
+        }
+        return continued ? nil : AgentQuestion(parts: parts, source: .transcript)
     }
 
     /// Parses `AskUserQuestion`'s `questions` input into card parts. Mirrors the hook:
