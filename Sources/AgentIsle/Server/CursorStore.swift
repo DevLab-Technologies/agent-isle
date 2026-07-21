@@ -259,23 +259,59 @@ enum CursorStore {
     // MARK: - Blob / file:// helpers
 
     /// The path portion of the first embedded `file://` URI in a blob, percent-decoded.
-    /// Best-effort: the URI lives in a length-delimited protobuf field, but we don't parse
-    /// the framing (field numbers vary by Cursor version), so we read until a control/quote
-    /// byte. A trailing printable byte could over-read by a few chars — acceptable because
-    /// the cwd only feeds Jump (which falls back) and a title we prefer `meta.name` for.
+    ///
+    /// Cursor stores the workspace URI as a length-delimited protobuf string field, so the
+    /// bytes just before the URI are its length varint. We read that varint to take exactly
+    /// the URI's bytes — no over-reading into the following field. If the prefix doesn't
+    /// look like a plausible length (URI not length-delimited, or `file://` embedded
+    /// elsewhere), we fall back to scanning until a control/quote byte. Best-effort either
+    /// way: the cwd only feeds Jump (which falls back) and a title we prefer `meta.name` for.
     private static func fileURIPath(in data: Data) -> String? {
-        // The URI is plain ASCII inside an otherwise-binary blob; decode leniently and scan
-        // for the scheme rather than requiring the whole blob to be valid UTF-8.
-        let text = String(decoding: data, as: UTF8.self)
-        guard let range = text.range(of: "file://") else { return nil }
-        let rest = text[range.upperBound...]
-        // Stop at the first control/quote byte that can't be part of a path.
-        let raw = rest.prefix { ch in
-            guard let a = ch.asciiValue else { return false }
-            return a >= 0x20 && a != 0x22   // printable ASCII, not a double-quote
+        let bytes = [UInt8](data)
+        let scheme = Array("file://".utf8)
+        guard let start = firstIndex(of: scheme, in: bytes) else { return nil }
+
+        let end: Int
+        if let len = precedingVarintLength(bytes, valueStart: start),
+           len >= scheme.count, len <= 4096, start + len <= bytes.count {
+            end = start + len            // exact protobuf-framed length
+        } else {
+            var i = start                // fallback: stop at a control/quote byte
+            while i < bytes.count, bytes[i] >= 0x20, bytes[i] != 0x22 { i += 1 }
+            end = i
         }
-        let path = String(raw).removingPercentEncoding ?? String(raw)
-        return path.isEmpty ? nil : path
+
+        guard let uri = String(bytes: bytes[start..<end], encoding: .utf8) else { return nil }
+        let path = String(uri.dropFirst(scheme.count))
+        let decoded = path.removingPercentEncoding ?? path
+        return decoded.isEmpty ? nil : decoded
+    }
+
+    /// First index of `needle` within `haystack`, or nil.
+    private static func firstIndex(of needle: [UInt8], in haystack: [UInt8]) -> Int? {
+        guard !needle.isEmpty, haystack.count >= needle.count else { return nil }
+        for i in 0...(haystack.count - needle.count) where Array(haystack[i..<i + needle.count]) == needle {
+            return i
+        }
+        return nil
+    }
+
+    /// Decode the protobuf length varint that ends immediately before `valueStart`.
+    /// Varints are little-endian 7-bit groups with the continuation bit (0x80) set on every
+    /// group except the final (highest) one, which sits just before the value. We walk
+    /// backward from there. nil if the bytes before the value don't form a clean varint
+    /// (e.g. `file://` isn't at a protobuf value boundary), so the caller can fall back.
+    private static func precedingVarintLength(_ bytes: [UInt8], valueStart: Int) -> Int? {
+        guard valueStart >= 1, bytes[valueStart - 1] & 0x80 == 0 else { return nil }
+        var groups: [UInt8] = [bytes[valueStart - 1] & 0x7f]   // terminal (highest) group
+        var i = valueStart - 2
+        while i >= 0, bytes[i] & 0x80 != 0 {
+            groups.append(bytes[i] & 0x7f)
+            i -= 1
+            if groups.count > 5 { return nil }                 // longer than any real length varint
+        }
+        // `groups` is highest-order first; fold back into the integer value.
+        return groups.reduce(0) { ($0 << 7) | Int($1) }
     }
 
     private static func isJSON(_ data: Data) -> Bool {

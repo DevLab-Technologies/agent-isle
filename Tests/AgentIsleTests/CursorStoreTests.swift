@@ -31,14 +31,16 @@ final class CursorStoreTests: XCTestCase {
         let toolResult = Data(#"{"role":"tool","content":[{"type":"tool-result","toolCallId":"c1","result":"line one\nline two"}]}"#.utf8)
 
         // A protobuf-style linking blob: [tag 0x0a][len 0x20][32-byte child hash] per
-        // child, then the workspace file:// URI Cursor embeds in the root.
+        // child, then the workspace file:// URI as a length-delimited field 9, and a
+        // trailing printable byte to prove we stop at the framed length (no over-read).
         var root = Data()
         for child in [user, assistant, toolResult] {
             root.append(0x0a)
             root.append(0x20)
             root.append(contentsOf: sha256Bytes(child))
         }
-        root.append(contentsOf: Array("file:///Users/me/project\n".utf8))
+        root.append(pbString(field: 9, "file:///Users/me/project"))
+        root.append(0x7b)   // a stray '{' right after the URI field
 
         let metaJSON = """
         {"agentId":"sess-42","name":"Fix the parser","mode":"auto-run",\
@@ -71,7 +73,8 @@ final class CursorStoreTests: XCTestCase {
 
         // derived one-liners
         XCTAssertEqual(CursorStore.lastMessageText(at: db), "On it.")
-        XCTAssertEqual(CursorStore.workspacePath(at: db), "/Users/me/project")
+        XCTAssertEqual(CursorStore.workspacePath(at: db), "/Users/me/project",
+                       "stops at the protobuf-framed length, not the trailing '{'")
 
         // routed through the public dispatcher too
         XCTAssertTrue(ChatHistory.isSupported(.cursor))
@@ -85,7 +88,8 @@ final class CursorStoreTests: XCTestCase {
         for child in [user, assistant] {
             root.append(0x0a); root.append(0x20); root.append(contentsOf: sha256Bytes(child))
         }
-        root.append(contentsOf: Array("file:///Users/me/app\n".utf8))
+        root.append(pbString(field: 9, "file:///Users/me/app"))
+        root.append(0x41)   // stray 'A' after the URI field
 
         let metaJSON = """
         {"name":"Ship it","createdAt":1700000000000,"lastUsedModel":"gpt-5.4-high",\
@@ -113,6 +117,17 @@ final class CursorStoreTests: XCTestCase {
         XCTAssertEqual(msgs[1].blocks, [.text("hi there")])
     }
 
+    func testWorkspacePathFallsBackToControlCharScan() throws {
+        // A blob where the byte before `file://` (0x80) is not a clean length varint, so
+        // the reader falls back to scanning until the terminating control byte.
+        var blob = Data([0x80])
+        blob.append(contentsOf: Array("file:///tmp/x\n".utf8))
+        let db = tmp.appendingPathComponent("store.db")
+        try makeStore(at: db, metaJSON: #"{"name":"x"}"#, blobs: [blob])
+
+        XCTAssertEqual(CursorStore.workspacePath(at: db), "/tmp/x")
+    }
+
     func testMissingOrCorruptDatabaseYieldsNothing() throws {
         let missing = tmp.appendingPathComponent("store.db")
         XCTAssertNil(CursorStore.meta(at: missing))
@@ -126,6 +141,15 @@ final class CursorStoreTests: XCTestCase {
     }
 
     // MARK: - Fixture helpers
+
+    /// A protobuf length-delimited string field: [tag = field<<3 | 2][len varint][bytes].
+    /// Test strings stay under 128 bytes, so the length is a single-byte varint.
+    private func pbString(field: Int, _ s: String) -> Data {
+        precondition(s.utf8.count < 128)
+        var d = Data([UInt8((field << 3) | 2), UInt8(s.utf8.count)])
+        d.append(contentsOf: Array(s.utf8))
+        return d
+    }
 
     private func sha256Bytes(_ data: Data) -> [UInt8] { Array(SHA256.hash(data: data)) }
     private func sha256Hex(_ data: Data) -> String {
