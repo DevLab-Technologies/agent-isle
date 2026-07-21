@@ -8,6 +8,8 @@ payload on stdin for each hook event; this script translates it into a Agent Isl
 
 For PreToolUse it BLOCKS on the island's decision and echoes the allow/deny back to
 Claude Code in the hook output format, so you can approve tools right from the notch.
+The AskUserQuestion tool is a special case: it's shown as a question card and the chosen
+answer is fed back to Claude, so multiple-choice questions can be answered from the notch.
 
 Usage:  agent-isle-hook.py <event-kind>
         event-kind in: pretooluse | posttooluse | notification | stop | userprompt
@@ -56,6 +58,57 @@ def short_path(p):
         return None
     parts = p.split("/")
     return "/".join(parts[-3:]) if len(parts) > 3 else p
+
+
+def ask_question(base, tool_input):
+    """Handle Claude's AskUserQuestion tool: show every question in the notch, wait for
+    the answers, and feed them back to Claude by denying the tool with the answers as the
+    reason (a PreToolUse hook can't return a tool result, only allow/deny + reason).
+
+    All questions in the call are shown together in one card; the notch supports
+    single-select, multi-select, and a free-text "Other" field per question, so the
+    returned answer is a headed line per question. A question with no options, or a
+    malformed input, returns False so the caller falls back to Claude's own native
+    picker. A notch timeout raises out of post() and is caught by the caller, likewise
+    falling back to native.
+
+    Returns True when the questions were handled here (caller should exit)."""
+    questions = tool_input.get("questions") or []
+    if not questions:
+        return False
+
+    wire = []
+    for q in questions:
+        options = [o.get("label", "") for o in (q.get("options") or []) if o.get("label")]
+        if not options:
+            return False  # can't represent an option-less question — defer to native
+        wire.append({
+            "header": q.get("header") or "",
+            "question": q.get("question") or q.get("header") or "Choose an option",
+            "options": options,
+            "multiSelect": bool(q.get("multiSelect")),
+            "allowOther": True,
+        })
+
+    result = post(dict(base, type="question", questions=wire), timeout=TIMEOUT)
+    answer = result.get("decision")
+    # No usable answer → let Claude prompt natively. Empty means the prompt was
+    # abandoned; "allow"/"deny" is the island's fail-safe reply when it can't encode a
+    # real answer (see EventServer.reply), never a genuine question response.
+    if not answer or answer in ("allow", "deny"):
+        return False
+
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "The user answered from Agent Isle:\n" + answer +
+                "\nUse these answers and continue; do not call AskUserQuestion again for this."
+            ),
+        }
+    }))
+    return True
 
 
 def detect_terminal():
@@ -132,6 +185,17 @@ def main():
         if kind == "pretooluse":
             tool = hook.get("tool_name", "Tool")
             tin = hook.get("tool_input", {}) or {}
+            # Claude's own "AskUserQuestion" tool is a question, not a tool to gate.
+            # Surface it as a proper question card so it can be answered from the notch,
+            # instead of a generic allow/deny "Wants to run AskUserQuestion" prompt. A
+            # question is never gated as allow/deny: if it isn't handled here (multi-part
+            # question, or the user didn't answer in the notch), just report activity and
+            # let Claude's own native picker take over.
+            if tool == "AskUserQuestion":
+                if not ask_question(base, tin):
+                    post(dict(base, type="status", status="working",
+                              message="Asking a question"))
+                sys.exit(0)
             if should_ask(mode, tool):
                 event = dict(base, type="permission", tool=tool,
                              file=short_path(tin.get("file_path")),

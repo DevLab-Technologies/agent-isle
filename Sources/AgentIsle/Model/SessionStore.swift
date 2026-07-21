@@ -217,14 +217,19 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    func answerQuestion(sessionID: UUID, option: String) {
+    /// Send the user's answer (one option, several joined options, or free text) back
+    /// to the waiting agent. Ignores empty answers so a stray submit can't resolve it.
+    func answerQuestion(sessionID: UUID, answer: String) {
+        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let oneLine = trimmed.replacingOccurrences(of: "\n", with: "; ")
         update(id: sessionID) { s in
             s.question = nil
             s.status = .working
-            s.lastMessage = "You chose: \(option)"
+            s.lastMessage = "You chose: \(oneLine)"
         }
         SoundPlayer.shared.play(.select)
-        EventServer.shared?.reply(sessionID: sessionID, decision: option)
+        EventServer.shared?.reply(sessionID: sessionID, decision: trimmed)
     }
 
     func acknowledge(sessionID: UUID) {

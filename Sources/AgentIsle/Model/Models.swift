@@ -164,10 +164,35 @@ struct DiffLine: Identifiable, Equatable {
     var text: String
 }
 
-/// A question the agent is asking, with selectable options.
-struct AgentQuestion: Equatable {
-    var prompt: String
+/// One question within an ask: a prompt and its selectable options.
+struct QuestionPart: Equatable, Hashable, Identifiable {
+    var id: Int                     // position in the ask; keys the card's per-part state
+    var header: String              // short label, e.g. "Deploy target"
+    var prompt: String              // full question text
     var options: [String]
+    var multiSelect: Bool = false   // let the user pick more than one option
+    var allowsOther: Bool = false   // offer a free-text "Other" field
+}
+
+/// A question the agent is asking. Holds one or more parts, answered together and
+/// sent back in a single reply (matching how Claude's AskUserQuestion batches them).
+struct AgentQuestion: Equatable, Hashable {
+    var parts: [QuestionPart]
+
+    init(parts: [QuestionPart]) { self.parts = parts }
+
+    /// Convenience for a single-part question (demo mode / simple producers).
+    init(prompt: String, options: [String],
+         multiSelect: Bool = false, allowsOther: Bool = false) {
+        self.parts = [QuestionPart(id: 0, header: "", prompt: prompt, options: options,
+                                   multiSelect: multiSelect, allowsOther: allowsOther)]
+    }
+
+    /// Short one-line summary for compact surfaces (collapsed island / lastMessage).
+    var summary: String {
+        guard let first = parts.first else { return "Question" }
+        return parts.count > 1 ? "\(parts.count) questions" : first.prompt
+    }
 }
 
 /// One item in an agent's task/todo list (Claude Code's `TodoWrite`).

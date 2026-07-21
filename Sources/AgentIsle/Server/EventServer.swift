@@ -141,8 +141,7 @@ final class EventServer {
             park(conn, sessionID: sessionID)
 
         case "question":
-            let q = AgentQuestion(prompt: event.prompt ?? "Choose an option",
-                                  options: event.options ?? ["Yes", "No"])
+            let q = Self.question(from: event)
             if store.sessions.contains(where: { $0.id == sessionID }) {
                 store.update(id: sessionID) { s in
                     s.status = .asking
@@ -213,6 +212,33 @@ final class EventServer {
         store.isAutoAllowed(sessionID: sessionID, key: request.allowKey) ? .autoAllow : .prompt
     }
 
+    /// Build the question model from an event, preferring the multi-part `questions`
+    /// array and falling back to the flat single-question fields for simple producers.
+    private static func question(from event: AgentEvent) -> AgentQuestion {
+        if let wire = event.questions {
+            // Drop parts a user could never answer (no options and no free-text field) —
+            // otherwise Submit stays disabled forever. `id` keeps the original index so
+            // it stays unique after filtering. The hook never sends these; this guards
+            // against any other `/event` producer.
+            let parts = wire.enumerated().compactMap { idx, w -> QuestionPart? in
+                let options = w.options ?? []
+                let allowsOther = w.allowOther ?? false
+                guard !options.isEmpty || allowsOther else { return nil }
+                return QuestionPart(id: idx,
+                                    header: w.header ?? "",
+                                    prompt: w.question ?? w.prompt ?? w.header ?? "Choose an option",
+                                    options: options,
+                                    multiSelect: w.multiSelect ?? false,
+                                    allowsOther: allowsOther)
+            }
+            if !parts.isEmpty { return AgentQuestion(parts: parts) }
+        }
+        return AgentQuestion(prompt: event.prompt ?? "Choose an option",
+                             options: event.options ?? ["Yes", "No"],
+                             multiSelect: event.multiSelect ?? false,
+                             allowsOther: event.allowOther ?? false)
+    }
+
     // MARK: - Parking / replies for a blocked hook
 
     /// Hold a hook's connection open until the user decides, and watch for the hook
@@ -264,9 +290,16 @@ final class EventServer {
     }
 
     /// Called by the store when the user decides; unblocks the parked connection.
+    /// `decision` can be free text (an "Other" answer), so it's JSON-encoded rather
+    /// than interpolated — otherwise a quote or backslash would corrupt the reply.
+    /// If encoding somehow fails, fall back to "deny": for a permission that fails
+    /// closed (never auto-approve), and for a question the hook reads it as "no usable
+    /// answer" and defers to Claude's native picker.
     func reply(sessionID: UUID, decision: String) {
         guard let conn = pending.removeValue(forKey: sessionID) else { return }
-        let json = "{\"ok\":true,\"decision\":\"\(decision)\"}"
+        let payload: [String: Any] = ["ok": true, "decision": decision]
+        let json = (try? JSONSerialization.data(withJSONObject: payload))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"ok":true,"decision":"deny"}"#
         respond(on: conn, json: json)
     }
 
@@ -303,15 +336,29 @@ struct AgentEvent: Decodable {
     var removed: Int?
     var diff: [WireDiffLine]?
 
-    // question fields
+    // question fields — a multi-part `questions` array, or the flat single-question form
+    var questions: [WireQuestion]?
     var prompt: String?
     var options: [String]?
+    var multiSelect: Bool?           // allow selecting more than one option
+    var allowOther: Bool?            // show a free-text "Other" field
 
     /// Deterministic UUID from the caller's session string so repeat events map to one row.
     var stableID: UUID {
         guard let session else { return UUID() }
         return UUID.deterministic(from: session)
     }
+}
+
+/// One question in a multi-part ask. `question` is AskUserQuestion's key for the full
+/// text; `prompt` is accepted as an alias for simpler producers.
+struct WireQuestion: Decodable {
+    var header: String?
+    var question: String?
+    var prompt: String?
+    var options: [String]?
+    var multiSelect: Bool?
+    var allowOther: Bool?
 }
 
 struct WireDiffLine: Decodable {
