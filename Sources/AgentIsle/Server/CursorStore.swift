@@ -259,6 +259,10 @@ enum CursorStore {
     // MARK: - Blob / file:// helpers
 
     /// The path portion of the first embedded `file://` URI in a blob, percent-decoded.
+    /// Best-effort: the URI lives in a length-delimited protobuf field, but we don't parse
+    /// the framing (field numbers vary by Cursor version), so we read until a control/quote
+    /// byte. A trailing printable byte could over-read by a few chars — acceptable because
+    /// the cwd only feeds Jump (which falls back) and a title we prefer `meta.name` for.
     private static func fileURIPath(in data: Data) -> String? {
         // The URI is plain ASCII inside an otherwise-binary blob; decode leniently and scan
         // for the scheme rather than requiring the whole blob to be valid UTF-8.

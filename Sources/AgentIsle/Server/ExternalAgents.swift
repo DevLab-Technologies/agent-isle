@@ -135,8 +135,7 @@ enum ExternalAgents {
                     let db = sess.appendingPathComponent("store.db")
                     // The WAL sidecar is what changes on a live write, so it dates activity
                     // more reliably than store.db itself.
-                    let mtime = [db, db.appendingPathExtension("db-wal"),
-                                 sess.appendingPathComponent("store.db-wal")]
+                    let mtime = [db, sess.appendingPathComponent("store.db-wal")]
                         .compactMap(modDate).max()
                     guard let mtime, fm.fileExists(atPath: db.path),
                           now.timeIntervalSince(mtime) < activeWindow else { continue }
