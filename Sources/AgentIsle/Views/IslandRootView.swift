@@ -5,8 +5,11 @@ import SwiftUI
 struct IslandRootView: View {
     let geometry: NotchGeometry
     @EnvironmentObject var store: SessionStore
+    @EnvironmentObject var settings: AppSettings
 
-    private var expanded: Bool { store.isExpanded || store.isHovering || store.isPinned }
+    private var expanded: Bool {
+        store.isExpanded || (settings.expandOnHover && store.isHovering) || store.isPinned
+    }
 
     var body: some View {
         VStack(spacing: 0) {

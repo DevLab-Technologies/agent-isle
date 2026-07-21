@@ -1,14 +1,18 @@
 import SwiftUI
 
-/// One session in the expanded list: agent badge, title, live message, and — when
-/// the agent needs the user — an inline permission or question card.
+/// One session in the expanded list: agent identity, live activity, task progress, and —
+/// when the agent needs the user — an inline permission or question card.
 struct SessionRow: View {
     let session: AgentSession
     @EnvironmentObject var store: SessionStore
+    @EnvironmentObject var settings: AppSettings
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            headerRow
+        VStack(alignment: .leading, spacing: Theme.Space.md) {
+            identity
+            if settings.showTasks, !session.tasks.isEmpty {
+                TaskListView(tasks: session.tasks)
+            }
             if let permission = session.permission {
                 PermissionCard(session: session, request: permission)
             }
@@ -19,13 +23,13 @@ struct SessionRow: View {
                     .id(question)
             }
         }
-        .padding(10)
+        .padding(Theme.Space.lg)
         .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.white.opacity(0.04))
+            RoundedRectangle(cornerRadius: Theme.Radius.card)
+                .fill(needsAttention ? session.status.color.opacity(0.06) : Theme.Fill.card)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: Theme.Radius.card)
                 .stroke(borderColor, lineWidth: needsAttention ? 1 : 0.5)
         )
     }
@@ -35,79 +39,94 @@ struct SessionRow: View {
     }
 
     private var borderColor: Color {
-        needsAttention ? session.status.color.opacity(0.5) : Color.white.opacity(0.06)
+        needsAttention ? session.status.color.opacity(0.5) : Theme.Fill.hairline
     }
 
-    private var headerRow: some View {
-        HStack(spacing: 9) {
-            AgentBadge(agent: session.agent)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+    // MARK: - Identity block (tappable — opens the live chat)
+
+    private var identity: some View {
+        HStack(alignment: .top, spacing: Theme.Space.md) {
+            AgentBadge(agent: session.agent, size: 32)
+            VStack(alignment: .leading, spacing: 5) {
+                // Title + agent tag + elapsed, mirroring a native message header.
+                HStack(spacing: Theme.Space.sm) {
                     Text(session.title)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.95))
+                        .font(Theme.Font.title(12.5))
+                        .foregroundStyle(Theme.Ink.primary)
                         .lineLimit(1)
-                    Text(session.agent.displayName)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(session.agent.tint.opacity(0.9))
-                    Text("·").foregroundStyle(.white.opacity(0.25))
-                    Text(session.terminal)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.white.opacity(0.4))
+                    Spacer(minLength: Theme.Space.sm)
+                    AgentTag(agent: session.agent)
                     if store.demoMode {
                         Text("DEMO")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(Theme.Font.label(8, weight: .bold))
+                            .foregroundStyle(Theme.Ink.tertiary)
                             .padding(.horizontal, 4).padding(.vertical, 1)
                             .background(Capsule().fill(Color.white.opacity(0.1)))
                     }
+                    Text(session.elapsedText)
+                        .font(Theme.Font.label(9.5, weight: .regular))
+                        .foregroundStyle(Theme.Ink.faint)
                 }
                 Text(session.lastMessage)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(Theme.Font.body(10.5))
+                    .foregroundStyle(Theme.Ink.secondary)
                     .lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 3) {
-                StatusPill(status: session.status)
-                HStack(spacing: 5) {
-                    if let tok = session.tokenText {
-                        HStack(spacing: 2) {
-                            Image(systemName: "circle.hexagongrid.fill")
-                                .font(.system(size: 7))
+                // Status + terminal + token meter, the calm bottom line.
+                HStack(spacing: Theme.Space.sm) {
+                    StatusPill(status: session.status)
+                    if settings.showTerminal {
+                        Text(session.terminal)
+                            .font(Theme.Font.label(9.5, weight: .regular))
+                            .foregroundStyle(Theme.Ink.tertiary)
+                    }
+                    if settings.showTokens, let tok = session.tokenText {
+                        HStack(spacing: 3) {
+                            Image(systemName: "circle.hexagongrid.fill").font(.system(size: 7))
                             Text(tok)
                         }
-                        .foregroundStyle(.white.opacity(0.4))
+                        .font(Theme.Font.label(9.5, weight: .regular))
+                        .foregroundStyle(Theme.Ink.faint)
                     }
-                    Text(session.elapsedText)
-                        .foregroundStyle(.white.opacity(0.3))
                 }
-                .font(.system(size: 9, design: .monospaced))
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            // Click a session to open its live chat (jump lives inside the chat header).
-            store.openChat(session)
-        }
+        .onTapGesture { store.openChat(session) }
     }
 }
 
+/// The compact agent mark — a tinted rounded tile with the agent's glyph.
 struct AgentBadge: View {
     let agent: AgentKind
+    var size: CGFloat = 28
     var body: some View {
         Text(agent.glyph)
-            .font(.system(size: 14, weight: .bold))
+            .font(.system(size: size * 0.5, weight: .bold))
             .foregroundStyle(agent.tint)
-            .frame(width: 28, height: 28)
+            .frame(width: size, height: size)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: size * 0.3)
                     .fill(agent.tint.opacity(0.15))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: size * 0.3)
                     .stroke(agent.tint.opacity(0.35), lineWidth: 0.5)
             )
+    }
+}
+
+/// The agent-name pill (e.g. "Claude"), tinted to the agent's accent — the competitor's
+/// most recognizable identity cue.
+struct AgentTag: View {
+    let agent: AgentKind
+    var body: some View {
+        Text(agent.displayName)
+            .font(Theme.Font.label(9, weight: .semibold))
+            .foregroundStyle(agent.tint)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(agent.tint.opacity(0.15)))
+            .overlay(Capsule().stroke(agent.tint.opacity(0.3), lineWidth: 0.5))
+            .fixedSize()
     }
 }
 
@@ -117,7 +136,7 @@ struct StatusPill: View {
         HStack(spacing: 4) {
             StatusDot(status: status)
             Text(status.label)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .font(Theme.Font.label(9, weight: .semibold))
                 .foregroundStyle(status.color)
         }
         .padding(.horizontal, 6).padding(.vertical, 3)

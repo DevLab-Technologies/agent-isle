@@ -16,16 +16,20 @@ struct NotchGeometry {
         let screen = NSScreen.screens.first(where: { $0.notchFrame != nil }) ?? NSScreen.main
         let frame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
+        // User tuning offsets (read straight from defaults so this stays actor-free).
+        let dw = UserDefaults.standard.double(forKey: DefaultsKeys.notchWidthAdjust)
+        let dh = UserDefaults.standard.double(forKey: DefaultsKeys.notchHeightAdjust)
+
         if let screen, let notch = screen.notchFrame {
             return NotchGeometry(screenFrame: frame,
-                                 notchWidth: notch.width,
-                                 notchHeight: notch.height,
+                                 notchWidth: max(60, notch.width + dw),
+                                 notchHeight: max(20, notch.height + dh),
                                  hasHardwareNotch: true)
         }
         // No notch: synthesize a pill roughly the size of a real Dynamic Island notch.
         return NotchGeometry(screenFrame: frame,
-                             notchWidth: 220,
-                             notchHeight: 32,
+                             notchWidth: max(60, 220 + dw),
+                             notchHeight: max(20, 32 + dh),
                              hasHardwareNotch: false)
     }
 }

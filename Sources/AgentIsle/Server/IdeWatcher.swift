@@ -86,6 +86,9 @@ final class IdeWatcher {
                     s.tokens = tokens
                     s.workspacePath = activity.cwd
                     s.transcriptURL = c.url
+                    // Only replace tasks when this scan actually found a TodoWrite; a tail
+                    // that no longer contains one shouldn't wipe a list we already have.
+                    if !activity.tasks.isEmpty { s.tasks = TaskList(items: activity.tasks) }
                     // Don't override a pending permission/question or its waiting status.
                     if s.permission == nil && s.question == nil {
                         s.status = working ? .working : .idle
@@ -102,6 +105,7 @@ final class IdeWatcher {
                     status: working ? .working : .idle,
                     startedAt: (try? c.url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? c.mtime,
                     updatedAt: c.mtime,
+                    tasks: TaskList(items: activity.tasks),
                     tokens: tokens,
                     workspacePath: activity.cwd,
                     transcriptURL: c.url))

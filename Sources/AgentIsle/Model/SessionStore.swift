@@ -23,9 +23,6 @@ final class SessionStore: ObservableObject {
     /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.
     @Published var islandSize: CGSize = CGSize(width: 520, height: 64)
 
-    /// Which sessions the expanded list shows (the footer tabs).
-    @Published var filter: SessionFilter = .all
-
     // MARK: - Live chat
 
     /// The session whose full conversation is currently open, or nil for the list view.
@@ -64,11 +61,6 @@ final class SessionStore: ObservableObject {
             }
             return a.updatedAt > b.updatedAt
         }
-    }
-
-    /// Sessions shown in the list, honoring the current footer filter.
-    var visibleSessions: [AgentSession] {
-        orderedSessions.filter { filter.matches($0) }
     }
 
     /// The session the collapsed island should surface first.
@@ -122,11 +114,15 @@ final class SessionStore: ObservableObject {
 
     func remove(id: UUID) {
         sessions.removeAll { $0.id == id }
+        bypassedSessions.remove(id)
+        alwaysAllowed[id] = nil
         if id == openedSessionID { closeChat() }
     }
 
     func clearAll() {
         sessions.removeAll()
+        bypassedSessions.removeAll()
+        alwaysAllowed.removeAll()
         if openedSessionID != nil { closeChat() }
     }
 
@@ -182,14 +178,43 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Permission decisions
 
-    func resolvePermission(sessionID: UUID, allow: Bool) {
+    /// Sessions the user chose to "Bypass" — every later request auto-approves.
+    private var bypassedSessions: Set<UUID> = []
+    /// Per-session "Always Allow" signatures (see `PermissionRequest.allowKey`).
+    private var alwaysAllowed: [UUID: Set<String>] = [:]
+
+    /// Whether a freshly-arrived request should be auto-approved without a card, because
+    /// the user previously chose Bypass for the session or Always-Allow for this signature.
+    func isAutoAllowed(sessionID: UUID, key: String) -> Bool {
+        bypassedSessions.contains(sessionID) || (alwaysAllowed[sessionID]?.contains(key) ?? false)
+    }
+
+    func resolvePermission(sessionID: UUID, decision: PermissionDecision) {
+        // Remember the choice so future prompts in this session can auto-answer.
+        // Note: `allowKey` is an exact tool+command signature, so "Always Allow" only
+        // silences an identical request — e.g. the same Bash command with a different
+        // cwd re-prompts. This is deliberately conservative rather than pattern-matching.
+        if decision == .bypass { bypassedSessions.insert(sessionID) }
+        if decision == .always, let key = sessions.first(where: { $0.id == sessionID })?.permission?.allowKey {
+            alwaysAllowed[sessionID, default: []].insert(key)
+        }
+        let allow = decision != .deny
         update(id: sessionID) { s in
             s.permission = nil
             s.status = allow ? .working : .idle
-            s.lastMessage = allow ? "Approved — continuing" : "Denied by user"
+            s.lastMessage = message(for: decision)
         }
         SoundPlayer.shared.play(allow ? .approve : .deny)
-        EventServer.shared?.reply(sessionID: sessionID, decision: allow ? "allow" : "deny")
+        EventServer.shared?.reply(sessionID: sessionID, decision: decision.wireValue)
+    }
+
+    private func message(for decision: PermissionDecision) -> String {
+        switch decision {
+        case .deny:      return "Denied by user"
+        case .allowOnce: return "Approved — continuing"
+        case .always:    return "Always allowing this action"
+        case .bypass:    return "Bypassing approvals for this session"
+        }
     }
 
     /// Send the user's answer (one option, several joined options, or free text) back
@@ -283,6 +308,7 @@ final class SessionStore: ObservableObject {
                 s.question = nil
                 s.status = .done
                 s.lastMessage = "Done — click to jump"
+                advanceTasks(&s.tasks)   // complete the active task, start the next
             }
             SoundPlayer.shared.play(.done)
         }
@@ -295,21 +321,53 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Mark the current in-progress task done and promote the next pending one, so the
+    /// demo's progress meter creeps forward on each completed cycle.
+    private func advanceTasks(_ tasks: inout TaskList) {
+        guard !tasks.isEmpty else { return }
+        if let active = tasks.items.firstIndex(where: { $0.state == .inProgress }) {
+            tasks.items[active].state = .completed
+        }
+        if let next = tasks.items.firstIndex(where: { $0.state == .pending }) {
+            tasks.items[next].state = .inProgress
+        }
+    }
+
     static func demoSessions() -> [AgentSession] {
         let now = Date()
+        func tasks(_ items: [(String, AgentTask.State)]) -> TaskList {
+            TaskList(items: items.enumerated().map { AgentTask(id: $0.offset, text: $0.element.0, state: $0.element.1) })
+        }
         return [
-            AgentSession(agent: .claude, title: "fix auth bug", terminal: "iTerm",
-                         lastMessage: "Let me look at the auth module",
-                         status: .working, startedAt: now.addingTimeInterval(-1620)),
+            AgentSession(agent: .claude, title: "island · vibe-clone", terminal: "iTerm",
+                         lastMessage: "Wiring the task list into the session card",
+                         status: .working, startedAt: now.addingTimeInterval(-1620),
+                         updatedAt: now,
+                         tasks: tasks([
+                            ("Scaffold SwiftPM macOS app + notch panel", .completed),
+                            ("Build Dynamic Island SwiftUI view", .completed),
+                            ("Parse Claude transcripts for live status", .completed),
+                            ("Render the agent task list in each card", .inProgress),
+                            ("Add progress meter and overflow collapse", .pending),
+                            ("Polish typography and spacing", .pending),
+                         ])),
             AgentSession(agent: .codex, title: "backend server", terminal: "Terminal",
                          lastMessage: "Building the REST endpoints",
-                         status: .working, startedAt: now.addingTimeInterval(-3600)),
+                         status: .working, startedAt: now.addingTimeInterval(-3600),
+                         updatedAt: now.addingTimeInterval(-40),
+                         tasks: tasks([
+                            ("Design the schema", .completed),
+                            ("Implement /auth endpoints", .inProgress),
+                            ("Add integration tests", .pending),
+                         ])),
             AgentSession(agent: .gemini, title: "optimize queries", terminal: "Ghostty",
                          lastMessage: "Analyzing the slow queries",
-                         status: .working, startedAt: now.addingTimeInterval(-18000)),
+                         status: .working, startedAt: now.addingTimeInterval(-18000),
+                         updatedAt: now.addingTimeInterval(-80)),
             AgentSession(agent: .cursor, title: "refactor ui", terminal: "VS Code",
                          lastMessage: "Waiting for input",
-                         status: .idle, startedAt: now.addingTimeInterval(-600))
+                         status: .idle, startedAt: now.addingTimeInterval(-600),
+                         updatedAt: now.addingTimeInterval(-120))
         ]
     }
 }

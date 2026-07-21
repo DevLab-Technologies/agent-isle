@@ -1,10 +1,16 @@
 import AVFoundation
 
 /// Synthesized 8-bit style event sounds — no audio files needed.
+///
+/// Main-actor isolated: `enabled`/`volume` are driven from `AppSettings` and `play()` is
+/// called from the (main-actor) store, so isolation is enforced rather than assumed.
+@MainActor
 final class SoundPlayer {
     static let shared = SoundPlayer()
 
     var enabled = true
+    /// 0…1 loudness, driven by `AppSettings.soundVolume`. Scales the wave amplitude.
+    var volume: Double = 0.6
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -64,13 +70,16 @@ final class SoundPlayer {
         buffer.frameLength = frameCount
         let ptr = buffer.floatChannelData![0]
 
+        // Amplitude scales with the user's volume; 0.3 keeps the default (0.6) at the
+        // engine's original 0.18 loudness.
+        let amp = Float(0.3 * max(0, min(1, volume)))
         var frame = 0
         for (freq, dur) in notes {
             let n = Int(dur * sampleRate)
             for i in 0..<n where frame < Int(frameCount) {
                 let phase = Double(i) * freq / sampleRate
                 // Square wave for the 8-bit character.
-                var sample: Float = sin(2 * .pi * phase) >= 0 ? 0.18 : -0.18
+                var sample: Float = sin(2 * .pi * phase) >= 0 ? amp : -amp
                 // Quick attack/decay envelope to avoid clicks.
                 let env = Float(min(1.0, Double(i) / 200.0)) * Float(min(1.0, Double(n - i) / 400.0))
                 sample *= env
