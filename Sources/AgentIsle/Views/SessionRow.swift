@@ -13,7 +13,7 @@ struct SessionRow: View {
             if settings.showTasks, !session.tasks.isEmpty {
                 TaskListView(tasks: session.tasks)
             }
-            if !session.subAgents.isEmpty {
+            if settings.showSubAgents, !session.subAgents.isEmpty {
                 SubAgentListView(subAgents: session.subAgents)
             }
             if let permission = session.permission {

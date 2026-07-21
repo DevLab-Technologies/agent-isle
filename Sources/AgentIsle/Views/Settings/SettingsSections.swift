@@ -123,6 +123,10 @@ struct DisplaySettings: View {
                             subtitle: "Display the model each session is running, e.g. Opus 4.8.") {
                     Toggle("", isOn: $settings.showModel).labelsHidden().toggleStyle(.switch)
                 }
+                SettingsRow(title: "Show Sub-agents",
+                            subtitle: "List the background sub-agents a session spawned and their progress.") {
+                    Toggle("", isOn: $settings.showSubAgents).labelsHidden().toggleStyle(.switch)
+                }
                 SettingsRow(title: "Show Terminal", showsDivider: false) {
                     Toggle("", isOn: $settings.showTerminal).labelsHidden().toggleStyle(.switch)
                 }

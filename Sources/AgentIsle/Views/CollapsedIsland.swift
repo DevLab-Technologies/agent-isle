@@ -6,8 +6,14 @@ struct CollapsedIsland: View {
     let notchWidth: CGFloat
     let notchHeight: CGFloat
     @EnvironmentObject var store: SessionStore
+    @EnvironmentObject var settings: AppSettings
 
     private var focus: AgentSession? { store.focusSession }
+
+    /// How many of the focus session's sub-agents are actively working right now.
+    private var workingSubAgents: Int {
+        focus?.subAgents.filter(\.working).count ?? 0
+    }
 
     /// Wider ears so the session title has real room before it truncates (the old 148
     /// clipped most repo·branch titles after ~14 chars).
@@ -71,6 +77,18 @@ struct CollapsedIsland: View {
                 CountBadge(count: store.attentionCount, color: attentionColor)
             } else if store.workingCount > 0 {
                 LivePulse(color: SessionStatus.working.color)
+            }
+            // How many sub-agents the surfaced session is running, right by the pulse.
+            if settings.showSubAgents, workingSubAgents > 0 {
+                HStack(spacing: 3) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text("\(workingSubAgents)")
+                        .font(Theme.Font.label(9.5, weight: .semibold))
+                }
+                .foregroundStyle(SessionStatus.working.color)
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(Capsule().fill(SessionStatus.working.color.opacity(0.14)))
             }
             if store.sessions.count > 1 {
                 Text("\(store.sessions.count)")
