@@ -235,6 +235,7 @@ struct SoundSettings: View {
 struct AboutSettings: View {
     private let repoURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle")!
     private let issuesURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle/issues")!
+    @State private var reportingProblem = false
 
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
@@ -265,9 +266,16 @@ struct AboutSettings: View {
                 }
             }
 
+            SettingsGroup(title: "Feedback") {
+                SettingsRow(title: "Report a Problem",
+                            subtitle: "Compose a bug report with diagnostics attached.") {
+                    Button("Report…") { reportingProblem = true }
+                }
+                LinkRow(title: "Browse Issues", value: "GitHub Issues", url: issuesURL, showsDivider: false)
+            }
+
             SettingsGroup(title: "Links") {
-                LinkRow(title: "Source Code", value: "GitHub", url: repoURL)
-                LinkRow(title: "Report an Issue", value: "GitHub Issues", url: issuesURL, showsDivider: false)
+                LinkRow(title: "Source Code", value: "GitHub", url: repoURL, showsDivider: false)
             }
 
             Button(role: .destructive) { NSApp.terminate(nil) } label: {
@@ -275,6 +283,7 @@ struct AboutSettings: View {
             }
             .controlSize(.large)
         }
+        .sheet(isPresented: $reportingProblem) { ReportProblemView() }
     }
 }
 
