@@ -124,6 +124,11 @@ final class NotchWindow: NSPanel {
         let x = (fixedWidth - w) / 2
         let y = fixedHeight - h   // top-aligned
         (contentView as? PassthroughView)?.interactiveRect = NSRect(x: x, y: y, width: w, height: h)
+        // The rect just changed, so a stationary pointer may now be outside it even
+        // though no mouse-move fired. Re-evaluate hover against the new rect, otherwise
+        // the panel stays expanded after it shrinks (e.g. a question card clears)
+        // until the pointer next moves.
+        syncHoverToPointer()
     }
 
     /// Builds the island root with its environment objects. Type-erased so the hosting
