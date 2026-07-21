@@ -40,10 +40,11 @@ enum UsageRange: String, CaseIterable, Identifiable {
 /// One bar/row in the usage chart.
 struct UsageBar: Identifiable {
     let id: String
-    let label: String       // axis label
-    let sortKey: Double      // for stable ordering (date interval or -tokens)
+    let label: String        // axis label (unique per bar — used as the chart's category)
+    let sortKey: Double       // for stable ordering (date interval or -tokens)
     let tokens: Int
-    let detail: String?      // secondary line (e.g. project for a session)
+    let detail: String?       // secondary line (e.g. session id for a session)
+    var date: Date? = nil     // set for time-series bars so the chart uses a real date axis
 }
 
 /// Loads and caches historical usage, exposes filtered aggregates for the Usage view.
@@ -67,10 +68,24 @@ final class UsageStore: ObservableObject {
         self.projectsDir = base.appendingPathComponent("projects")
     }
 
+    /// Test seam: seed records directly, bypassing the disk scan.
+    convenience init(records: [UsageAnalytics.Record]) {
+        self.init()
+        self.records = records
+    }
+
+    /// Background queue for the (blocking) transcript reads, kept off both the main actor
+    /// and the Swift concurrency cooperative pool.
+    private static let scanQueue = DispatchQueue(label: "com.devlab.agentisle.usage-scan", qos: .utility)
+
     /// Re-scan transcripts, reusing cached results for unchanged files. Changed/new files
-    /// are parsed concurrently off the main actor.
+    /// are parsed concurrently on a background queue. Re-entrant calls (e.g. the section's
+    /// `.task` and the sidebar tap firing together) are coalesced by the `loading` guard.
     func refresh() async {
+        guard !loading else { return }
         loading = true
+        defer { loading = false }
+
         let files = UsageAnalytics.transcripts(in: projectsDir)
 
         // Split into cached vs. needs-scan.
@@ -88,16 +103,20 @@ final class UsageStore: ObservableObject {
         }
 
         if !toScan.isEmpty {
-            let scanned = await withTaskGroup(of: (String, Date, [UsageAnalytics.Record]).self) { group in
-                for item in toScan {
-                    group.addTask {
+            // `concurrentPerform` bounds parallelism to the core count and does the blocking
+            // file reads off the cooperative pool, so a large project set can't starve it.
+            let scanned: [(String, Date, [UsageAnalytics.Record])] = await withCheckedContinuation { cont in
+                Self.scanQueue.async {
+                    var out = [(String, Date, [UsageAnalytics.Record])]()
+                    let lock = NSLock()
+                    DispatchQueue.concurrentPerform(iterations: toScan.count) { i in
+                        let item = toScan[i]
                         let recs = UsageAnalytics.scanFile(item.url, folderName: item.folder)
-                        return (item.url.path, item.mtime, recs)
+                        let entry = (item.url.path, item.mtime, recs)
+                        lock.lock(); out.append(entry); lock.unlock()
                     }
+                    cont.resume(returning: out)
                 }
-                var out: [(String, Date, [UsageAnalytics.Record])] = []
-                for await r in group { out.append(r) }
-                return out
             }
             for (path, mtime, recs) in scanned {
                 newCache[path] = (mtime, recs)
@@ -107,7 +126,6 @@ final class UsageStore: ObservableObject {
 
         cache = newCache
         records = merged
-        loading = false
     }
 
     // MARK: - Derived
@@ -138,7 +156,7 @@ final class UsageStore: ObservableObject {
     private func dayBars(byMonth: Bool) -> [UsageBar] {
         let cal = Calendar.current
         let fmt = DateFormatter()
-        fmt.dateFormat = byMonth ? "MMM yy" : "MMM d"
+        fmt.dateFormat = byMonth ? "MMM yyyy" : "MMM d, yyyy"
         var buckets: [Date: Int] = [:]
         for r in filtered {
             let key = byMonth ? (cal.dateInterval(of: .month, for: r.day)?.start ?? r.day) : r.day
@@ -146,10 +164,12 @@ final class UsageStore: ObservableObject {
         }
         return buckets
             .sorted { $0.key < $1.key }
-            .map { UsageBar(id: ISO8601DateFormatter().string(from: $0.key),
+            // id keyed on the real interval so it's unique across years without a formatter;
+            // the chart plots by `date` (below), so multi-year day collisions can't occur.
+            .map { UsageBar(id: "\(Int($0.key.timeIntervalSince1970))",
                             label: fmt.string(from: $0.key),
                             sortKey: $0.key.timeIntervalSince1970,
-                            tokens: $0.value, detail: nil) }
+                            tokens: $0.value, detail: nil, date: $0.key) }
     }
 
     private func keyedBars(key: (UsageAnalytics.Record) -> String, detail: String?) -> [UsageBar] {
@@ -174,9 +194,12 @@ final class UsageStore: ObservableObject {
             .prefix(12)
             .map { entry in
                 let short = String(entry.key.prefix(8))
-                return UsageBar(id: entry.key, label: project[entry.key] ?? short,
+                // Label must be unique per bar — two sessions in the same project would
+                // otherwise collapse onto one row. Combine project + short id.
+                let proj = project[entry.key] ?? "session"
+                return UsageBar(id: entry.key, label: "\(proj) · \(short)",
                                 sortKey: -Double(entry.value), tokens: entry.value,
-                                detail: short)
+                                detail: nil)
             }
     }
 }

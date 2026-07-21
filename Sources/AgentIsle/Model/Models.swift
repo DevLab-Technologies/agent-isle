@@ -299,12 +299,9 @@ struct AgentSession: Identifiable, Equatable {
         self.tokens = tokens
     }
 
-    /// Compact human-readable token count, e.g. "48.2k" or "1.3M".
+    /// Compact human-readable token count, e.g. "48.2k" or "1.3M" (nil when unknown).
     var tokenText: String? {
-        guard tokens > 0 else { return nil }
-        if tokens >= 1_000_000 { return String(format: "%.1fM", Double(tokens) / 1_000_000) }
-        if tokens >= 1_000 { return String(format: "%.1fk", Double(tokens) / 1_000) }
-        return "\(tokens)"
+        tokens > 0 ? formatTokens(tokens) : nil
     }
 
     /// Human-friendly elapsed time since the session started.

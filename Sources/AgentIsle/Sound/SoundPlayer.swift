@@ -1,6 +1,10 @@
 import AVFoundation
 
 /// Synthesized 8-bit style event sounds — no audio files needed.
+///
+/// Main-actor isolated: `enabled`/`volume` are driven from `AppSettings` and `play()` is
+/// called from the (main-actor) store, so isolation is enforced rather than assumed.
+@MainActor
 final class SoundPlayer {
     static let shared = SoundPlayer()
 

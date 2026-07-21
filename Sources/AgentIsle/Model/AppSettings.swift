@@ -1,6 +1,13 @@
 import SwiftUI
 import ServiceManagement
 
+/// Defaults keys shared beyond `AppSettings` — e.g. `NotchGeometry` reads the notch
+/// offsets directly (to stay actor-free), so the key strings must live in one place.
+enum DefaultsKeys {
+    static let notchWidthAdjust = "notchWidthAdjust"
+    static let notchHeightAdjust = "notchHeightAdjust"
+}
+
 /// User preferences, persisted to `UserDefaults` and observed by the views and the
 /// runtime pieces that react to them (sound, notch geometry, hover-expand, card layout).
 ///
@@ -47,8 +54,8 @@ final class AppSettings: ObservableObject {
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
         static let showTasks = "showTasks"
-        static let notchWidthAdjust = "notchWidthAdjust"
-        static let notchHeightAdjust = "notchHeightAdjust"
+        static let notchWidthAdjust = DefaultsKeys.notchWidthAdjust
+        static let notchHeightAdjust = DefaultsKeys.notchHeightAdjust
         static let maxPanelWidth = "maxPanelWidth"
         static let maxPanelHeight = "maxPanelHeight"
     }

@@ -17,8 +17,8 @@ struct NotchGeometry {
         let frame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
         // User tuning offsets (read straight from defaults so this stays actor-free).
-        let dw = UserDefaults.standard.double(forKey: "notchWidthAdjust")
-        let dh = UserDefaults.standard.double(forKey: "notchHeightAdjust")
+        let dw = UserDefaults.standard.double(forKey: DefaultsKeys.notchWidthAdjust)
+        let dh = UserDefaults.standard.double(forKey: DefaultsKeys.notchHeightAdjust)
 
         if let screen, let notch = screen.notchFrame {
             return NotchGeometry(screenFrame: frame,

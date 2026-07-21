@@ -76,19 +76,26 @@ struct UsageSettings: View {
 
     private var timeSeriesChart: some View {
         let bars = usage.bars
-        // Show at most ~8 evenly-spaced x labels so dense day ranges don't overlap.
-        let labels = bars.map(\.label)
-        let stride = max(1, labels.count / 8)
-        let shownLabels = labels.enumerated().filter { $0.offset % stride == 0 }.map(\.element)
+        let byMonth = usage.grouping == .month
+        let unit: Calendar.Component = byMonth ? .month : .day
+        // A real date axis lets Charts space and thin labels itself, and keeps days
+        // unique across years (no categorical-label collisions).
         return Chart(bars) { bar in
-            BarMark(x: .value("Period", bar.label), y: .value("Tokens", bar.tokens))
-                .foregroundStyle(LinearGradient(colors: [.pink, .purple],
-                                                startPoint: .top, endPoint: .bottom))
-                .cornerRadius(3)
+            if let date = bar.date {
+                BarMark(x: .value("Period", date, unit: unit), y: .value("Tokens", bar.tokens))
+                    .foregroundStyle(LinearGradient(colors: [.pink, .purple],
+                                                    startPoint: .top, endPoint: .bottom))
+                    .cornerRadius(3)
+            }
         }
-        .chartXScale(domain: labels)
-        .chartXAxis { AxisMarks(values: shownLabels) { value in
-            AxisValueLabel { if let s = value.as(String.self) { Text(s).font(.system(size: 9)) } }
+        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 7)) { value in
+            AxisValueLabel {
+                if let d = value.as(Date.self) {
+                    Text(d, format: byMonth ? .dateTime.month(.abbreviated).year()
+                                            : .dateTime.month(.abbreviated).day())
+                        .font(.system(size: 9))
+                }
+            }
         } }
         .chartYAxis { AxisMarks { value in
             AxisGridLine()

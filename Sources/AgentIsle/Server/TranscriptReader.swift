@@ -56,7 +56,7 @@ enum TranscriptReader {
     /// Reads only the last chunk of the file (transcripts can be large) and returns
     /// a human-readable activity line plus session metadata (branch, cwd, entrypoint)
     /// from the most recent entries that carry each field.
-    static func latestActivity(in url: URL, maxBytes: Int = 128 * 1024) -> Activity {
+    static func latestActivity(in url: URL, maxBytes: Int = 96 * 1024) -> Activity {
         let lines = tailLines(of: url, maxBytes: maxBytes)
         var branch: String?
         var cwd: String?
