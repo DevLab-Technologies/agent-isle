@@ -138,6 +138,11 @@ final class EventServer {
                                         status: .waiting, permission: request))
             }
             SoundPlayer.shared.play(.attention)
+            if let session = store.sessions.first(where: { $0.id == sessionID }) {
+                Notifier.shared.notifyPermission(session: session,
+                                                 tool: request.toolName,
+                                                 command: request.command)
+            }
             park(conn, sessionID: sessionID)
 
         case "question":
@@ -152,6 +157,9 @@ final class EventServer {
                                         status: .asking, question: q))
             }
             SoundPlayer.shared.play(.attention)
+            if let session = store.sessions.first(where: { $0.id == sessionID }) {
+                Notifier.shared.notifyQuestion(session: session, summary: q.summary)
+            }
             park(conn, sessionID: sessionID)
 
         case "done":
@@ -161,6 +169,9 @@ final class EventServer {
             upsertSession(id: sessionID, agent: agent, event: event, status: .done)
             store.update(id: sessionID) { $0.permission = nil; $0.question = nil }
             SoundPlayer.shared.play(.done)
+            if let session = store.sessions.first(where: { $0.id == sessionID }) {
+                Notifier.shared.notifyDone(session: session, title: session.title)
+            }
             respond(on: conn, json: #"{"ok":true}"#)
 
         case "remove":

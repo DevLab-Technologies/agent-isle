@@ -4,6 +4,7 @@ import SwiftUI
 
 struct GeneralSettings: View {
     @EnvironmentObject var store: SessionStore
+    @EnvironmentObject var settings: AppSettings
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
     var body: some View {
@@ -23,6 +24,15 @@ struct GeneralSettings: View {
                                 launchFailed = false
                             }
                         }
+                }
+            }
+
+            SettingsGroup(title: "Notifications",
+                          footnote: "System banners for permission requests, questions, and completions. Permission banners include Allow and Deny buttons.") {
+                SettingsRow(title: "Enable Notifications",
+                            subtitle: "Post a macOS banner when a session needs attention or finishes.",
+                            showsDivider: false) {
+                    Toggle("", isOn: $settings.notificationsEnabled).labelsHidden().toggleStyle(.switch)
                 }
             }
 

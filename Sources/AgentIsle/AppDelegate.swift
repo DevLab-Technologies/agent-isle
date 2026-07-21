@@ -29,6 +29,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         setupStatusItem()
 
+        // OS notifications for attention events. Give the notifier the store so banner
+        // Allow/Deny actions can route back to a decision, then ask for authorization once.
+        Notifier.shared.store = store
+        Notifier.shared.requestAuthorization()
+
         // Settings window: opened from the gear menu; notch tuning rebuilds the island.
         NotificationCenter.default.addObserver(
             forName: .openAgentIsleSettings, object: nil, queue: .main) { [weak self] _ in

@@ -143,6 +143,14 @@ final class IdeWatcher {
                     }
                 }
                 if newlySurfaced { SoundPlayer.shared.play(.attention) }
+                // A hook-free session has no explicit "done" event; its turn finishing shows
+                // up as the transcript going quiet, i.e. working -> idle. Notify once on that
+                // edge so completions are surfaced like hook-driven ones.
+                if existing.status == .working, !working,
+                   let finished = store.sessions.first(where: { $0.id == id }),
+                   finished.status == .idle {
+                    Notifier.shared.notifyDone(session: finished, title: finished.title)
+                }
             } else {
                 if store.demoMode { store.stopDemo(); store.clearAll() }
                 // A brand-new session nobody has pushed a hook question for: surface any

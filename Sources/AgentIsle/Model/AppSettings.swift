@@ -28,6 +28,11 @@ final class AppSettings: ObservableObject {
         didSet { d.set(soundVolume, forKey: Key.soundVolume); SoundPlayer.shared.volume = soundVolume }
     }
 
+    // MARK: Notifications
+    @Published var notificationsEnabled: Bool {
+        didSet { d.set(notificationsEnabled, forKey: Key.notificationsEnabled); Notifier.shared.enabled = notificationsEnabled }
+    }
+
     // MARK: Behavior
     @Published var expandOnHover: Bool { didSet { d.set(expandOnHover, forKey: Key.expandOnHover) } }
 
@@ -52,6 +57,7 @@ final class AppSettings: ObservableObject {
     private enum Key {
         static let soundEnabled = "soundEnabled"
         static let soundVolume = "soundVolume"
+        static let notificationsEnabled = "notificationsEnabled"
         static let expandOnHover = "expandOnHover"
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
@@ -68,6 +74,7 @@ final class AppSettings: ObservableObject {
         d.register(defaults: [
             Key.soundEnabled: true,
             Key.soundVolume: 0.6,
+            Key.notificationsEnabled: true,
             Key.expandOnHover: true,
             Key.showTokens: true,
             Key.showTerminal: true,
@@ -81,6 +88,7 @@ final class AppSettings: ObservableObject {
         ])
         soundEnabled = d.bool(forKey: Key.soundEnabled)
         soundVolume = d.double(forKey: Key.soundVolume)
+        notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
         expandOnHover = d.bool(forKey: Key.expandOnHover)
         showTokens = d.bool(forKey: Key.showTokens)
         showTerminal = d.bool(forKey: Key.showTerminal)
@@ -95,6 +103,8 @@ final class AppSettings: ObservableObject {
         // Push initial sound prefs into the player (didSet doesn't fire during init).
         SoundPlayer.shared.enabled = soundEnabled
         SoundPlayer.shared.volume = soundVolume
+        // Same for the notifier's enabled flag.
+        Notifier.shared.enabled = notificationsEnabled
     }
 
     private func postGeometryChange() {
