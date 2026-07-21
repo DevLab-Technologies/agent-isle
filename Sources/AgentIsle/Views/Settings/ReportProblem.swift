@@ -40,10 +40,26 @@ enum ProblemReport {
         """
     }
 
+    /// Upper bound on the user-supplied description. GitHub returns HTTP 414
+    /// once the whole new-issue URL grows past ~8 KB, so we cap the free-text
+    /// portion well under that and let the user paste the rest on GitHub.
+    static let maxDetailsLength = 6000
+
+    /// `URLComponents.queryItems` leaves `&`, `+`, and `=` unescaped in values
+    /// (they're legal query sub-delimiters), which corrupts titles/bodies that
+    /// contain them. Encode explicitly against a stricter set instead.
+    private static let queryValueAllowed =
+        CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+="))
+
+    private static func encode(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: queryValueAllowed) ?? value
+    }
+
     /// Assembles the GitHub new-issue URL with the title/body query params.
     static func issueURL(title: String, details: String) -> URL? {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDetails = details.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDetails = String(
+            details.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxDetailsLength))
 
         let body = """
         **What happened**
@@ -53,10 +69,10 @@ enum ProblemReport {
         """
 
         var components = URLComponents(string: "https://github.com/\(repo)/issues/new")
-        components?.queryItems = [
-            URLQueryItem(name: "labels", value: "bug"),
-            URLQueryItem(name: "title", value: "[bug] \(trimmedTitle)"),
-            URLQueryItem(name: "body", value: body),
+        components?.percentEncodedQueryItems = [
+            URLQueryItem(name: "labels", value: encode("bug")),
+            URLQueryItem(name: "title", value: encode("[bug] \(trimmedTitle)")),
+            URLQueryItem(name: "body", value: encode(body)),
         ]
         return components?.url
     }
@@ -92,7 +108,15 @@ struct ReportProblemView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("WHAT HAPPENED").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                HStack {
+                    Text("WHAT HAPPENED").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    if details.count > ProblemReport.maxDetailsLength - 500 {
+                        Text("\(details.count)/\(ProblemReport.maxDetailsLength)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(details.count > ProblemReport.maxDetailsLength ? .red : .secondary)
+                    }
+                }
                 TextEditor(text: $details)
                     .font(.system(size: 13))
                     .frame(minHeight: 120)

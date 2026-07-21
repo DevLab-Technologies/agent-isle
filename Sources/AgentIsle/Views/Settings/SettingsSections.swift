@@ -237,17 +237,12 @@ struct AboutSettings: View {
     private let issuesURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle/issues")!
     @State private var reportingProblem = false
 
-    private var version: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        return v ?? "dev"
-    }
-
     var body: some View {
         SettingsScaffold(section: .about) {
             VStack(spacing: 8) {
                 AppMark(size: 52)
                 Text("Agent Isle").font(.system(size: 18, weight: .bold))
-                Text("Version \(version)").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("Version \(ProblemReport.appVersion)").font(.system(size: 12)).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
