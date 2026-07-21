@@ -105,17 +105,18 @@ final class UsageStore: ObservableObject {
         if !toScan.isEmpty {
             // `concurrentPerform` bounds parallelism to the core count and does the blocking
             // file reads off the cooperative pool, so a large project set can't starve it.
+            // Capture an immutable snapshot and collect through a Sendable, lock-guarded sink
+            // so nothing mutable is captured in the concurrent closure.
+            let items = toScan
             let scanned: [(String, Date, [UsageAnalytics.Record])] = await withCheckedContinuation { cont in
                 Self.scanQueue.async {
-                    var out = [(String, Date, [UsageAnalytics.Record])]()
-                    let lock = NSLock()
-                    DispatchQueue.concurrentPerform(iterations: toScan.count) { i in
-                        let item = toScan[i]
+                    let sink = ScanSink()
+                    DispatchQueue.concurrentPerform(iterations: items.count) { i in
+                        let item = items[i]
                         let recs = UsageAnalytics.scanFile(item.url, folderName: item.folder)
-                        let entry = (item.url.path, item.mtime, recs)
-                        lock.lock(); out.append(entry); lock.unlock()
+                        sink.add((item.url.path, item.mtime, recs))
                     }
-                    cont.resume(returning: out)
+                    cont.resume(returning: sink.drain())
                 }
             }
             for (path, mtime, recs) in scanned {
@@ -201,6 +202,20 @@ final class UsageStore: ObservableObject {
                                 sortKey: -Double(entry.value), tokens: entry.value,
                                 detail: nil)
             }
+    }
+}
+
+/// Lock-guarded collector for parallel scan results. Reference type + `@unchecked
+/// Sendable` so it can be captured (as a `let`) and mutated safely inside a
+/// `concurrentPerform` closure without tripping strict-concurrency capture rules.
+private final class ScanSink: @unchecked Sendable {
+    private var out: [(String, Date, [UsageAnalytics.Record])] = []
+    private let lock = NSLock()
+    func add(_ entry: (String, Date, [UsageAnalytics.Record])) {
+        lock.lock(); out.append(entry); lock.unlock()
+    }
+    func drain() -> [(String, Date, [UsageAnalytics.Record])] {
+        lock.lock(); defer { lock.unlock() }; return out
     }
 }
 
