@@ -128,52 +128,218 @@ struct PermissionCard: View {
     }
 }
 
-/// Inline multiple-choice question card.
+/// Inline question card for Claude's AskUserQuestion. Renders every question part in one
+/// card and sends all answers back together. A lone single-select part answers on tap;
+/// anything else (multi-select or multiple parts) collects choices behind a Submit button.
+/// Each part can also offer a free-text "Other" field.
 struct QuestionCard: View {
     let session: AgentSession
     let question: AgentQuestion
     @EnvironmentObject var store: SessionStore
 
+    // Keyed by part id, so answers stay independent across parts.
+    @State private var selected: [Int: Set<Int>] = [:]
+    @State private var otherText: [Int: String] = [:]
+    @FocusState private var focusedOther: Int?
+
+    private var accent: Color { SessionStatus.asking.color }
+
+    /// A single single-select part is answered instantly on tap (no Submit needed).
+    private var isSimpleSingle: Bool {
+        question.parts.count == 1 && !question.parts[0].multiSelect
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "questionmark.circle.fill")
                     .font(.system(size: 10))
-                    .foregroundStyle(SessionStatus.asking.color)
-                Text(question.prompt)
+                    .foregroundStyle(accent)
+                Text(question.parts.count == 1 ? question.parts[0].prompt : "Questions")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(2)
-            }
-            VStack(spacing: 5) {
-                ForEach(Array(question.options.enumerated()), id: \.offset) { idx, option in
-                    Button {
-                        store.answerQuestion(sessionID: session.id, option: option)
-                    } label: {
-                        HStack {
-                            Text("⌘\(idx + 1)")
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                .foregroundStyle(SessionStatus.asking.color)
-                            Text(option)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.85))
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(SessionStatus.asking.color.opacity(0.25), lineWidth: 0.5)
-                        )
-                    }
-                    .buttonStyle(.plain)
+                if question.parts.count > 1 {
+                    Spacer(minLength: 4)
+                    Text("\(question.parts.count)")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(accent)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Capsule().fill(accent.opacity(0.15)))
                 }
+            }
+            ForEach(question.parts) { part in
+                partSection(part)
+            }
+            if !isSimpleSingle {
+                submitButton
             }
         }
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(SessionStatus.asking.color.opacity(0.06))
+                .fill(accent.opacity(0.06))
         )
+    }
+
+    @ViewBuilder
+    private func partSection(_ part: QuestionPart) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            // For a single part the prompt is already in the header row above.
+            if question.parts.count > 1 {
+                if !part.header.isEmpty {
+                    Text(part.header.uppercased())
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(accent.opacity(0.9))
+                }
+                Text(part.prompt)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(3)
+            }
+            ForEach(Array(part.options.enumerated()), id: \.offset) { idx, option in
+                optionRow(part: part, idx: idx, option: option)
+            }
+            if part.allowsOther {
+                otherRow(part)
+            }
+        }
+    }
+
+    private func optionRow(part: QuestionPart, idx: Int, option: String) -> some View {
+        let isSelected = selected[part.id]?.contains(idx) == true
+        return Button {
+            selectOption(part: part, idx: idx, option: option)
+        } label: {
+            HStack(spacing: 8) {
+                selectionIcon(part: part, isSelected: isSelected)
+                Text(option)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(isSelected ? 0.10 : 0.05)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(accent.opacity(isSelected ? 0.5 : 0.25), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func selectionIcon(part: QuestionPart, isSelected: Bool) -> some View {
+        // Checkbox for multi-select, radio for single-select. A lone single-select part
+        // answers on tap so it never shows as selected, but the radio still reads as
+        // "pick one". (Earlier ⌘-number badges were dropped — no shortcut was wired.)
+        let name: String = part.multiSelect
+            ? (isSelected ? "checkmark.square.fill" : "square")
+            : (isSelected ? "largecircle.fill.circle" : "circle")
+        Image(systemName: name)
+            .font(.system(size: 11))
+            .foregroundStyle(isSelected ? accent : .white.opacity(0.35))
+    }
+
+    private func otherRow(_ part: QuestionPart) -> some View {
+        let isFocused = focusedOther == part.id
+        return HStack(spacing: 6) {
+            Image(systemName: "square.and.pencil")
+                .font(.system(size: 10))
+                .foregroundStyle(accent.opacity(0.8))
+            TextField("Other…", text: binding(for: part.id))
+                .textFieldStyle(.plain)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.9))
+                .focused($focusedOther, equals: part.id)
+                .onSubmit(submit)
+            // A lone single-select part has no Submit button, so the field sends itself.
+            if isSimpleSingle && !trimmedOther(part.id).isEmpty {
+                Button(action: submit) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(accent.opacity(isFocused ? 0.5 : 0.25), lineWidth: 0.5)
+        )
+    }
+
+    private var submitButton: some View {
+        let enabled = composedAnswer() != nil
+        return Button(action: submit) {
+            Text("Submit")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(enabled ? .black : .white.opacity(0.4))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(enabled ? accent : Color.white.opacity(0.08))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    // MARK: - State helpers
+
+    private func binding(for partID: Int) -> Binding<String> {
+        Binding(get: { otherText[partID] ?? "" },
+                set: { otherText[partID] = $0 })
+    }
+
+    private func trimmedOther(_ partID: Int) -> String {
+        (otherText[partID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func selectOption(part: QuestionPart, idx: Int, option: String) {
+        if isSimpleSingle {
+            sendAnswer(line(for: part, values: [option]))
+            return
+        }
+        var set = selected[part.id] ?? []
+        if part.multiSelect {
+            if set.contains(idx) { set.remove(idx) } else { set.insert(idx) }
+        } else {
+            set = set.contains(idx) ? [] : [idx]   // radio: re-tap clears
+        }
+        selected[part.id] = set
+    }
+
+    /// The combined answer, or nil if any part is still unanswered. One line per part,
+    /// prefixed with the part's header so Claude can map each answer to its question.
+    private func composedAnswer() -> String? {
+        var lines: [String] = []
+        for part in question.parts {
+            var values = part.options.enumerated()
+                .filter { selected[part.id]?.contains($0.offset) == true }
+                .map(\.element)
+            let other = trimmedOther(part.id)
+            if !other.isEmpty { values.append(other) }
+            guard !values.isEmpty else { return nil }
+            lines.append(line(for: part, values: values))
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private func line(for part: QuestionPart, values: [String]) -> String {
+        let joined = values.joined(separator: ", ")
+        return part.header.isEmpty ? joined : "\(part.header): \(joined)"
+    }
+
+    private func submit() {
+        guard let composed = composedAnswer() else { return }
+        sendAnswer(composed)
+    }
+
+    private func sendAnswer(_ text: String) {
+        store.answerQuestion(sessionID: session.id, answer: text)
     }
 }
