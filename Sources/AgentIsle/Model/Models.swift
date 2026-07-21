@@ -266,6 +266,17 @@ struct TaskList: Equatable {
     }
 }
 
+/// A background sub-agent spawned by a session (Claude Code's `Task` tool). Each runs in
+/// its own `<session>/subagents/agent-*.jsonl` transcript while the parent waits, so its
+/// progress is invisible on the parent's own transcript — we surface it here.
+struct SubAgent: Identifiable, Equatable {
+    let id: String          // agent file id (stable across re-reads)
+    var title: String       // the task it was spawned with (first prompt line)
+    var lastMessage: String // its latest activity line
+    var working: Bool       // transcript changed very recently
+    var updatedAt: Date
+}
+
 /// One piece of a chat message, rendered as its own block in the transcript view.
 enum ChatBlock: Equatable {
     case text(String)
@@ -301,6 +312,7 @@ struct AgentSession: Identifiable, Equatable {
     var tasks: TaskList         // the agent's current todo list (empty when none)
     var tokens: Int             // total tokens used this session (0 if unknown)
     var model: String?          // display name of the current model, e.g. "Opus 4.8" (nil if unknown)
+    var subAgents: [SubAgent]   // active background sub-agents it spawned (empty when none)
     var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
     var terminalBundleID: String?  // real host app bundle id (from the hook's TERM_PROGRAM)
     var transcriptURL: URL?     // on-disk conversation file (Claude/Grok/Copilot), for the live chat view
@@ -318,6 +330,7 @@ struct AgentSession: Identifiable, Equatable {
          tasks: TaskList = TaskList(items: []),
          tokens: Int = 0,
          model: String? = nil,
+         subAgents: [SubAgent] = [],
          workspacePath: String? = nil,
          terminalBundleID: String? = nil,
          transcriptURL: URL? = nil) {
@@ -337,6 +350,7 @@ struct AgentSession: Identifiable, Equatable {
         self.tasks = tasks
         self.tokens = tokens
         self.model = model
+        self.subAgents = subAgents
     }
 
     /// Compact human-readable token count, e.g. "48.2k" or "1.3M" (nil when unknown).

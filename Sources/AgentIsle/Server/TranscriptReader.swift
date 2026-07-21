@@ -43,6 +43,70 @@ enum TranscriptReader {
         return nil
     }
 
+    // MARK: - Sub-agents
+
+    /// Discover a session's active background sub-agents. Claude Code writes each one to
+    /// `<session-id>/subagents/agent-*.jsonl` (a sidechain), so while the parent waits its
+    /// own transcript is quiet and these are the only sign of progress.
+    static func subAgents(inDir dir: URL, activeWindow: TimeInterval,
+                          workingWindow: TimeInterval, max: Int = 8) -> [SubAgent] {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        let now = Date()
+        let recent: [(url: URL, mtime: Date)] = files
+            .filter { $0.pathExtension == "jsonl" }
+            .compactMap { url in
+                let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate) ?? .distantPast
+                return now.timeIntervalSince(m) < activeWindow ? (url, m) : nil
+            }
+            .sorted { $0.mtime > $1.mtime }
+            .prefix(max)
+            .map { $0 }
+        return recent.map { entry in
+            SubAgent(id: entry.url.deletingPathExtension().lastPathComponent,
+                     title: firstUserText(in: entry.url) ?? "Sub-agent",
+                     lastMessage: activityLine(in: entry.url),
+                     working: now.timeIntervalSince(entry.mtime) < workingWindow,
+                     updatedAt: entry.mtime)
+        }
+    }
+
+    /// The task a sub-agent was spawned with — its first user turn is the spawn prompt.
+    static func firstUserText(in url: URL, maxBytes: Int = 16 * 1024) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: maxBytes)) ?? Data()
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            guard let d = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  (obj["type"] as? String) == "user",
+                  let msg = obj["message"] as? [String: Any] else { continue }
+            if let s = msg["content"] as? String { return firstLine(s) }
+            if let arr = msg["content"] as? [[String: Any]] {
+                for b in arr where (b["type"] as? String) == "text" {
+                    if let t = b["text"] as? String, !t.isEmpty { return firstLine(t) }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// A one-line "what it's doing now" summary from a transcript's newest turn.
+    static func activityLine(in url: URL, maxBytes: Int = 32 * 1024) -> String {
+        for raw in tailLines(of: url, maxBytes: maxBytes).reversed() {
+            guard let d = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            let type = obj["type"] as? String
+            if type == "assistant" || type == "user",
+               let msg = obj["message"] as? [String: Any],
+               let s = summarize(type: type, content: msg["content"]) {
+                return firstLine(s)
+            }
+        }
+        return "Working"
+    }
+
     /// Total tokens used across the whole session by summing per-message `usage`
     /// (input + output + cache read/creation). Reads the full file, so callers should
     /// cache the result by file modification time.

@@ -72,9 +72,18 @@ final class IdeWatcher {
             trackedIDs.insert(id)
 
             let title = displayTitle(activity: activity)
-            let working = Date().timeIntervalSince(c.mtime) < workingWindow
             let terminal = source.label
             let tokens = tokens(for: c)
+
+            // Background sub-agents live in `<session-id>/subagents/*.jsonl`. A session
+            // waiting on them has a quiet transcript of its own, so treat it as working
+            // while any sub-agent is active — otherwise it looks idle mid-orchestration.
+            let subDir = c.url.deletingPathExtension().appendingPathComponent("subagents")
+            let subs = TranscriptReader.subAgents(inDir: subDir,
+                                                  activeWindow: activeWindow,
+                                                  workingWindow: workingWindow)
+            let working = Date().timeIntervalSince(c.mtime) < workingWindow
+                || subs.contains { $0.working }
 
             // Drop the answered-marker once the transcript's pending question moves on, so
             // a genuinely new question can surface later.
@@ -106,6 +115,7 @@ final class IdeWatcher {
                     // Only replace tasks when this scan actually found a TodoWrite; a tail
                     // that no longer contains one shouldn't wipe a list we already have.
                     if !activity.tasks.isEmpty { s.tasks = TaskList(items: activity.tasks) }
+                    s.subAgents = subs
 
                     if hookOwned {
                         // The hook manages the question/permission lifecycle; just refresh activity.
@@ -142,6 +152,7 @@ final class IdeWatcher {
                     tasks: TaskList(items: activity.tasks),
                     tokens: tokens,
                     model: activity.model,
+                    subAgents: subs,
                     workspacePath: activity.cwd,
                     transcriptURL: c.url))
                 if transcriptQuestion != nil { SoundPlayer.shared.play(.attention) }
