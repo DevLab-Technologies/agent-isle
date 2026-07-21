@@ -84,6 +84,14 @@ struct ExpandedIsland: View {
                     Button("Install Claude Code Hooks…") { HookInstaller.install() }
                 }
             }
+            if CursorHookInstaller.hasCursor() {
+                if !HookInstaller.hasClaudeCode() { Divider() }
+                if CursorHookInstaller.isInstalled() {
+                    Button("Remove Cursor Hooks") { CursorHookInstaller.uninstall() }
+                } else {
+                    Button("Install Cursor Hooks…") { CursorHookInstaller.install() }
+                }
+            }
             Divider()
             Button("Check for Updates…") { Updater.shared.checkForUpdates(userInitiated: true) }
             Toggle("Automatically Install Updates", isOn: Binding(

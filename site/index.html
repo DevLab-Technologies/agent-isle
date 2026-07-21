@@ -272,7 +272,7 @@
       <div class="card"><div class="ic">✳</div><h3>Every agent</h3>
         <p>Claude Code (terminal, VS Code, Cursor, Desktop), Grok, and GitHub Copilot — discovered automatically, no config.</p></div>
       <div class="card"><div class="ic">✓</div><h3>Approve from the notch</h3>
-        <p>Claude Code permission requests show an inline diff. Allow or deny with ⌘Y / ⌘N — the decision flows straight back.</p></div>
+        <p>Claude Code and Cursor permission requests show an inline diff. Allow or deny with ⌘Y / ⌘N — the decision flows straight back.</p></div>
       <div class="card"><div class="ic">→</div><h3>Click to jump</h3>
         <p>Click a session to focus its terminal or IDE — detected via TERM_PROGRAM, so integrated terminals land in the right window.</p></div>
       <div class="card"><div class="ic">◌</div><h3>Usage at a glance</h3>
@@ -295,9 +295,9 @@
     <h2>Works with your stack</h2>
     <div class="agents">
       <span class="chip"><span class="d" style="background:var(--claude)"></span>Claude Code</span>
+      <span class="chip"><span class="d" style="background:#bfc0cc"></span>Cursor</span>
       <span class="chip"><span class="d" style="background:#cfcfd6"></span>Grok</span>
       <span class="chip"><span class="d" style="background:var(--blue)"></span>Copilot</span>
-      <span class="chip"><span class="d" style="background:var(--muted)"></span>Cursor <small>&nbsp;(via hooks)</small></span>
       <span class="chip"><span class="d" style="background:var(--muted)"></span>Any tool <small>&nbsp;(event API)</small></span>
     </div>
     <p class="lead" style="margin-top:28px">Terminals too: iTerm2, Ghostty, Warp, Terminal.app, WezTerm, Kitty — precise jump to the right app.</p>
@@ -326,13 +326,13 @@
       <p>No. Agent Isle reads each agent's local session history and runs a localhost-only
       event server. There's no cloud, no account, and no telemetry.</p></details>
     <details><summary>Which agents are supported?</summary>
-      <p>Claude Code (terminal, VS Code, Cursor, and Desktop sessions), Grok, and GitHub
-      Copilot work out of the box. Any other tool can appear by POSTing to the local event
-      server, and Cursor can report via its hooks.</p></details>
+      <p>Claude Code (terminal, VS Code, Cursor, and Desktop sessions), the Cursor CLI
+      (<code>cursor-agent</code>), Grok, and GitHub Copilot work out of the box. Any other
+      tool can appear by POSTing to the local event server.</p></details>
     <details><summary>Do I need to configure anything?</summary>
-      <p>Monitoring is automatic and hook-free. To also approve Claude Code permissions from
-      the notch, Agent Isle can add hooks to your Claude config — it asks on first launch,
-      with an opt-out, and you can toggle it anytime from the gear menu.</p></details>
+      <p>Monitoring is automatic and hook-free. To also approve permissions from the notch,
+      Agent Isle can add hooks to your Claude Code or Cursor config — it asks on first
+      launch, with an opt-out, and you can toggle it anytime from the gear menu.</p></details>
     <details><summary>Is it really free?</summary>
       <p>Yes — MIT licensed and open source. Download a build from Releases or build it
       yourself with <code>swift build</code>.</p></details>

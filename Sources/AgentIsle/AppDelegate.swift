@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var ideWatcher: IdeWatcher?
     private var hookMenuItem: NSMenuItem?
+    private var cursorHookMenuItem: NSMenuItem?
     private var autoUpdateMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -132,35 +133,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Every launch: if the user has Claude Code but our hooks aren't properly
-    /// installed, offer to install them. There's no permanent opt-out — we ask on
-    /// each launch until the hooks are in place, after which this stops firing on
-    /// its own (see `HookInstaller.isInstalled`).
+    /// A CLI whose hooks Agent Isle can install for notch approvals. Claude Code and
+    /// Cursor share the same shape (detect / installed? / install / remove), so the
+    /// launch prompt and gear menu drive both through this descriptor.
+    struct HookTool {
+        let name: String
+        let hasTool: () -> Bool
+        let isInstalled: () -> Bool
+        let install: () -> Bool
+        let uninstall: () -> Bool
+    }
+
+    static let hookTools: [HookTool] = [
+        HookTool(name: "Claude Code",
+                 hasTool: HookInstaller.hasClaudeCode, isInstalled: HookInstaller.isInstalled,
+                 install: HookInstaller.install, uninstall: HookInstaller.uninstall),
+        HookTool(name: "Cursor",
+                 hasTool: CursorHookInstaller.hasCursor, isInstalled: CursorHookInstaller.isInstalled,
+                 install: CursorHookInstaller.install, uninstall: CursorHookInstaller.uninstall),
+    ]
+
+    /// Every launch: for each detected CLI whose hooks aren't properly installed, offer to
+    /// install them in a single prompt. There's no permanent opt-out — we ask on each
+    /// launch until the hooks are in place, after which this stops firing on its own (see
+    /// each installer's `isInstalled`).
     private func maybePromptForHooks() {
-        guard HookInstaller.hasClaudeCode(),
-              !HookInstaller.isInstalled() else { return }
+        let pending = Self.hookTools.filter { $0.hasTool() && !$0.isInstalled() }
+        guard !pending.isEmpty else { return }
+        let names = listNames(pending.map(\.name))
 
         let alert = NSAlert()
-        alert.messageText = "Enable Claude Code approvals?"
+        alert.messageText = "Enable \(names) approvals?"
         alert.informativeText = """
         Agent Isle already monitors your sessions. To also approve permission \
-        requests right from the notch, it can add hooks to your Claude Code config \
-        (~/.claude/settings.json). You can remove them anytime from the gear menu.
+        requests right from the notch, it can add hooks to your \(names) config. \
+        You can remove them anytime from the gear menu.
         """
         alert.addButton(withTitle: "Install")
         alert.addButton(withTitle: "Not Now")
 
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn {
-            let ok = HookInstaller.install()
+            let ok = pending.map { $0.install() }.allSatisfy { $0 }
             let done = NSAlert()
-            done.messageText = ok ? "Hooks installed" : "Couldn't install hooks"
+            done.messageText = ok ? "Hooks installed" : "Couldn't install some hooks"
             done.informativeText = ok
-                ? "Restart any running Claude Code sessions for approvals to take effect."
+                ? "Restart any running \(names) sessions for approvals to take effect."
                 : "See Console for details. You can retry from the gear menu."
             done.runModal()
         }
         // Not Now — we'll ask again next launch.
+    }
+
+    /// "Claude Code", "Claude Code and Cursor", "A, B and C".
+    private func listNames(_ names: [String]) -> String {
+        switch names.count {
+        case 0:  return ""
+        case 1:  return names[0]
+        case 2:  return "\(names[0]) and \(names[1])"
+        default: return names.dropLast().joined(separator: ", ") + " and " + names.last!
+        }
     }
 
     private func setupStatusItem() {
@@ -210,6 +242,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(hookItem)
         hookMenuItem = hookItem
 
+        let cursorHookItem = NSMenuItem(title: "Install Cursor Hooks", action: #selector(toggleCursorHooks), keyEquivalent: "")
+        cursorHookItem.target = self
+        menu.addItem(cursorHookItem)
+        cursorHookMenuItem = cursorHookItem
+
         menu.addItem(.separator())
 
         let checkUpdateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
@@ -236,6 +273,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ? "Remove Claude Code Hooks"
             : "Install Claude Code Hooks"
         hookMenuItem?.isHidden = !HookInstaller.hasClaudeCode()
+        cursorHookMenuItem?.title = CursorHookInstaller.isInstalled()
+            ? "Remove Cursor Hooks"
+            : "Install Cursor Hooks"
+        cursorHookMenuItem?.isHidden = !CursorHookInstaller.hasCursor()
         autoUpdateMenuItem?.state = Updater.shared.autoInstall ? .on : .off
     }
 
@@ -249,15 +290,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleHooks() {
-        if HookInstaller.isInstalled() {
-            HookInstaller.uninstall()
+        toggle(Self.hookTools[0])
+    }
+
+    @objc private func toggleCursorHooks() {
+        toggle(Self.hookTools[1])
+    }
+
+    private func toggle(_ tool: HookTool) {
+        if tool.isInstalled() {
+            _ = tool.uninstall()
             return
         }
-        let ok = HookInstaller.install()
+        let ok = tool.install()
         let done = NSAlert()
         done.messageText = ok ? "Hooks installed" : "Couldn't install hooks"
         done.informativeText = ok
-            ? "Restart any running Claude Code sessions for approvals to take effect."
+            ? "Restart any running \(tool.name) sessions for approvals to take effect."
             : "See Console for details."
         done.runModal()
     }

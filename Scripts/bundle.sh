@@ -38,6 +38,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN" "$CONTENTS/MacOS/AgentIsle"
 cp "$ROOT/Sources/AgentIsle/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 cp "$ROOT/Scripts/agent-isle-hook.py" "$CONTENTS/Resources/agent-isle-hook.py"
+cp "$ROOT/Scripts/agent-isle-cursor-hook.py" "$CONTENTS/Resources/agent-isle-cursor-hook.py"
 
 # Quoted heredoc (no shell interpolation) — the version is stamped in afterward via
 # PlistBuddy so nothing in the plist can be accidentally expanded by the shell.

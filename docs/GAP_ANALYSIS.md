@@ -97,7 +97,7 @@ Those three close the gap that users actually feel.
 
 | Feature | Vibe Island | Agent Isle | Priority | Effort |
 |---|---|---|---|---|
-| **Multi-CLI hooks** — install for Gemini, Cursor, Grok, Copilot, Copilot-VSCode | Yes (per-CLI toggles) | Partial — hook install is **Claude-only**; others are read-only history | P1 | M |
+| **Multi-CLI hooks** — install for Gemini, Cursor, Grok, Copilot, Copilot-VSCode | Yes (per-CLI toggles) | Partial — **Claude Code + Cursor** have hook install (approvals + monitoring); Grok/Copilot remain read-only history | P1 | M |
 | **Auto-configure new CLIs** | Yes | **Missing** | P2 | S |
 | **Add custom CLI branch** | Yes | **Missing** | P2 | M |
 | **IDE extension install** (VS Code) for precise tab-jump | Yes | **Missing** | P2 | M |
@@ -162,7 +162,8 @@ Those three close the gap that users actually feel.
 3. Session filtering (by directory / first-prompt / launcher app) + built-in probe filter. *(M)*
 4. Quiet scenes (Focus / locked / screen-share) reusing the notification path. *(M)*
 5. "Always Allow" / Bypass decision + smart suppression + hide-in-fullscreen. *(S–M)*
-6. Multi-CLI hook install (Gemini, Cursor, Grok, Copilot). *(M)*
+6. Multi-CLI hook install — Cursor **done** (approvals + read-free `store.db` monitoring);
+   Gemini, Grok, Copilot remaining. *(M)*
 7. Subscription usage-limit readout in the header. *(M)*
 8. Subagents / richer activity model. *(M)*
 9. Settings window `.regular` policy while open (⌘Tab + app menu). *(S)*

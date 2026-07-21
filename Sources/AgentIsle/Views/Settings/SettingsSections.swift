@@ -46,18 +46,19 @@ struct GeneralSettings: View {
 
 struct IntegrationsSettings: View {
     @State private var claudeInstalled = HookInstaller.isInstalled()
+    @State private var cursorInstalled = CursorHookInstaller.isInstalled()
     private let hasClaude = HookInstaller.hasClaudeCode()
+    private let hasCursor = CursorHookInstaller.hasCursor()
 
     // Agents discovered from their own history files (no hook required).
-    private let autoDetected: [AgentKind] = [.codex, .gemini, .cursor, .grok, .copilot]
+    private let autoDetected: [AgentKind] = [.cursor, .grok, .copilot]
 
     var body: some View {
         SettingsScaffold(section: .integrations) {
             SettingsGroup(title: "CLI Hooks",
-                          footnote: "Hooks let Claude Code push permission and completion events to the island in real time.") {
+                          footnote: "Hooks let a CLI push permission and completion events to the island in real time, so you can approve tool calls straight from the notch.") {
                 SettingsRow(title: "Claude Code",
-                            subtitle: hasClaude ? nil : "Claude Code not found in ~/.claude.",
-                            showsDivider: false) {
+                            subtitle: hasClaude ? nil : "Claude Code not found in ~/.claude.") {
                     if hasClaude {
                         HStack(spacing: 8) {
                             StatusText(active: claudeInstalled)
@@ -66,6 +67,24 @@ struct IntegrationsSettings: View {
                                 set: { on in
                                     _ = on ? HookInstaller.install() : HookInstaller.uninstall()
                                     claudeInstalled = HookInstaller.isInstalled()
+                                }))
+                                .labelsHidden().toggleStyle(.switch)
+                        }
+                    } else {
+                        Text("Not installed").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+                SettingsRow(title: "Cursor",
+                            subtitle: hasCursor ? nil : "Cursor not found in ~/.cursor.",
+                            showsDivider: false) {
+                    if hasCursor {
+                        HStack(spacing: 8) {
+                            StatusText(active: cursorInstalled)
+                            Toggle("", isOn: Binding(
+                                get: { cursorInstalled },
+                                set: { on in
+                                    _ = on ? CursorHookInstaller.install() : CursorHookInstaller.uninstall()
+                                    cursorInstalled = CursorHookInstaller.isInstalled()
                                 }))
                                 .labelsHidden().toggleStyle(.switch)
                         }
