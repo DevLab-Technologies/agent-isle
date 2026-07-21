@@ -25,6 +25,9 @@ final class IdeWatcher {
     private var trackedIDs: Set<UUID> = []
     /// Cache of token totals keyed by session id, invalidated when the file changes.
     private var tokenCache: [String: (mtime: Date, tokens: Int)] = [:]
+    /// Sessions whose token total is being recomputed off-main, so we don't queue a
+    /// second read for the same file before the first lands.
+    private var tokenInFlight: Set<String> = []
     /// Cache of sub-agent task/activity keyed by agent id, so each poll re-reads a
     /// sub-agent file only when it actually changed. Pruned to live agents each scan.
     private var subAgentCache: [String: TranscriptReader.SubAgentCache] = [:]
@@ -195,14 +198,34 @@ final class IdeWatcher {
         pruneMissing(current: found)
     }
 
-    /// Token total for a session, cached by transcript modification time.
+    /// Last-known token total for a session, cached by transcript modification time. When
+    /// the file has changed, the recount (a multi-MB read + JSON parse) runs off the main
+    /// thread and updates the session when it lands — so the 2s scan never blocks the UI on
+    /// a large, actively-growing transcript. The stale (or zero) value is shown until then.
     private func tokens(for c: Candidate) -> Int {
         if let cached = tokenCache[c.sessionID], cached.mtime == c.mtime {
             return cached.tokens
         }
-        let total = TranscriptReader.sessionTokens(in: c.url)
-        tokenCache[c.sessionID] = (c.mtime, total)
-        return total
+        refreshTokens(for: c)
+        return tokenCache[c.sessionID]?.tokens ?? 0
+    }
+
+    private func refreshTokens(for c: Candidate) {
+        guard !tokenInFlight.contains(c.sessionID) else { return }
+        tokenInFlight.insert(c.sessionID)
+        let (url, sessionID, mtime) = (c.url, c.sessionID, c.mtime)
+        let id = UUID.deterministic(from: sessionID)
+        DispatchQueue.global(qos: .utility).async {
+            let total = TranscriptReader.sessionTokens(in: url)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.tokenCache[sessionID] = (mtime, total)
+                self.tokenInFlight.remove(sessionID)
+                if self.store.sessions.contains(where: { $0.id == id }) {
+                    self.store.update(id: id) { $0.tokens = total }
+                }
+            }
+        }
     }
 
     /// Every transcript touched within the active window (so concurrent sessions in the

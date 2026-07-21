@@ -165,7 +165,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "🏝️"
+        item.isVisible = true
+        // A template SF Symbol renders reliably in the menu bar (adapting to light/dark
+        // and the bar's tint); an emoji set via `title` can come out zero-width and look
+        // like "no icon". Fall back to the emoji only if the symbol is unavailable.
+        if let button = item.button {
+            if let image = NSImage(systemSymbolName: "sailboat.fill", accessibilityDescription: "Agent Isle") {
+                image.isTemplate = true
+                button.image = image
+            } else {
+                button.title = "🏝️"
+            }
+            button.toolTip = "Agent Isle"
+        }
         let menu = NSMenu()
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",")
