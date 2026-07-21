@@ -212,7 +212,7 @@ struct QuestionCard: View {
             selectOption(part: part, idx: idx, option: option)
         } label: {
             HStack(spacing: 8) {
-                selectionIcon(part: part, idx: idx, isSelected: isSelected)
+                selectionIcon(part: part, isSelected: isSelected)
                 Text(option)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.85))
@@ -229,20 +229,16 @@ struct QuestionCard: View {
     }
 
     @ViewBuilder
-    private func selectionIcon(part: QuestionPart, idx: Int, isSelected: Bool) -> some View {
-        if isSimpleSingle {
-            Text("⌘\(idx + 1)")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(accent)
-        } else if part.multiSelect {
-            Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                .font(.system(size: 11))
-                .foregroundStyle(isSelected ? accent : .white.opacity(0.35))
-        } else {
-            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                .font(.system(size: 11))
-                .foregroundStyle(isSelected ? accent : .white.opacity(0.35))
-        }
+    private func selectionIcon(part: QuestionPart, isSelected: Bool) -> some View {
+        // Checkbox for multi-select, radio for single-select. A lone single-select part
+        // answers on tap so it never shows as selected, but the radio still reads as
+        // "pick one". (Earlier ⌘-number badges were dropped — no shortcut was wired.)
+        let name: String = part.multiSelect
+            ? (isSelected ? "checkmark.square.fill" : "square")
+            : (isSelected ? "largecircle.fill.circle" : "circle")
+        Image(systemName: name)
+            .font(.system(size: 11))
+            .foregroundStyle(isSelected ? accent : .white.opacity(0.35))
     }
 
     private func otherRow(_ part: QuestionPart) -> some View {

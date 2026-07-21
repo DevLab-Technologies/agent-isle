@@ -189,16 +189,23 @@ final class EventServer {
     /// Build the question model from an event, preferring the multi-part `questions`
     /// array and falling back to the flat single-question fields for simple producers.
     private static func question(from event: AgentEvent) -> AgentQuestion {
-        if let wire = event.questions, !wire.isEmpty {
-            let parts = wire.enumerated().map { idx, w in
-                QuestionPart(id: idx,
-                             header: w.header ?? "",
-                             prompt: w.question ?? w.prompt ?? w.header ?? "Choose an option",
-                             options: w.options ?? [],
-                             multiSelect: w.multiSelect ?? false,
-                             allowsOther: w.allowOther ?? false)
+        if let wire = event.questions {
+            // Drop parts a user could never answer (no options and no free-text field) —
+            // otherwise Submit stays disabled forever. `id` keeps the original index so
+            // it stays unique after filtering. The hook never sends these; this guards
+            // against any other `/event` producer.
+            let parts = wire.enumerated().compactMap { idx, w -> QuestionPart? in
+                let options = w.options ?? []
+                let allowsOther = w.allowOther ?? false
+                guard !options.isEmpty || allowsOther else { return nil }
+                return QuestionPart(id: idx,
+                                    header: w.header ?? "",
+                                    prompt: w.question ?? w.prompt ?? w.header ?? "Choose an option",
+                                    options: options,
+                                    multiSelect: w.multiSelect ?? false,
+                                    allowsOther: allowsOther)
             }
-            return AgentQuestion(parts: parts)
+            if !parts.isEmpty { return AgentQuestion(parts: parts) }
         }
         return AgentQuestion(prompt: event.prompt ?? "Choose an option",
                              options: event.options ?? ["Yes", "No"],
@@ -259,11 +266,14 @@ final class EventServer {
     /// Called by the store when the user decides; unblocks the parked connection.
     /// `decision` can be free text (an "Other" answer), so it's JSON-encoded rather
     /// than interpolated — otherwise a quote or backslash would corrupt the reply.
+    /// If encoding somehow fails, fall back to "deny": for a permission that fails
+    /// closed (never auto-approve), and for a question the hook reads it as "no usable
+    /// answer" and defers to Claude's native picker.
     func reply(sessionID: UUID, decision: String) {
         guard let conn = pending.removeValue(forKey: sessionID) else { return }
         let payload: [String: Any] = ["ok": true, "decision": decision]
         let json = (try? JSONSerialization.data(withJSONObject: payload))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"ok":true,"decision":"allow"}"#
+            .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"ok":true,"decision":"deny"}"#
         respond(on: conn, json: json)
     }
 

@@ -92,7 +92,9 @@ def ask_question(base, tool_input):
 
     result = post(dict(base, type="question", questions=wire), timeout=TIMEOUT)
     answer = result.get("decision")
-    # No usable answer (e.g. session ended / abandoned) → let Claude prompt natively.
+    # No usable answer → let Claude prompt natively. Empty means the prompt was
+    # abandoned; "allow"/"deny" is the island's fail-safe reply when it can't encode a
+    # real answer (see EventServer.reply), never a genuine question response.
     if not answer or answer in ("allow", "deny"):
         return False
 
