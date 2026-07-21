@@ -5,6 +5,8 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let store = SessionStore()
     private var notchWindow: NotchWindow?
+    private var settingsWindow: NSWindow?
+    private var geometryRefreshWork: DispatchWorkItem?
     private var statusItem: NSStatusItem?
     private var ideWatcher: IdeWatcher?
     private var hookMenuItem: NSMenuItem?
@@ -17,12 +19,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // server port (4711). A fresh launch wins.
         terminateOtherInstances()
 
-        // Floating island over the notch.
-        let window = NotchWindow(store: store)
-        window.orderFrontRegardless()
+        // Floating island over the notch. Suppressed in settings-capture mode so it
+        // doesn't float over the settings window during a screenshot.
+        let settingsCapture = ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] == "1"
+        let window = NotchWindow(store: store, settings: AppSettings.shared)
+        if !settingsCapture { window.orderFrontRegardless() }
         notchWindow = window
 
         setupStatusItem()
+
+        // Settings window: opened from the gear menu; notch tuning rebuilds the island.
+        NotificationCenter.default.addObserver(
+            forName: .openAgentIsleSettings, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.openSettings() }
+            }
+        NotificationCenter.default.addObserver(
+            forName: .agentIsleGeometryChanged, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.scheduleGeometryRefresh() }
+            }
 
         // Start the local event server so real agents can push updates.
         EventServer.shared = EventServer(store: store)
@@ -31,8 +45,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Discover real sessions (local Claude Code + Grok/Copilot). No demo data by
         // default — a fresh install should never show fake sessions. Demo is opt-in
         // from the gear menu.
-        ideWatcher = IdeWatcher(store: store)
-        ideWatcher?.start()
+        // Dev/marketing: `AGENT_ISLE_DEMO=1` opens the island expanded with demo data so
+        // the panel can be captured without wiring up a real agent. In this mode we skip
+        // the live watcher (which would otherwise replace the demo with real sessions)
+        // and the hook prompt.
+        let demoLaunch = ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] == "1"
+        if demoLaunch {
+            store.startDemo()
+            store.isExpanded = true
+        } else {
+            ideWatcher = IdeWatcher(store: store)
+            ideWatcher?.start()
+        }
+
+        // Dev/marketing: auto-open the settings window for capture.
+        if ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.openSettings() }
+        }
 
         // Reposition if the display configuration changes.
         NotificationCenter.default.addObserver(
@@ -42,13 +71,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
 
         // Offer to set up Claude Code approvals on launch (unless already done / opted out).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.maybePromptForHooks()
+        if ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] != "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.maybePromptForHooks()
+            }
         }
 
         // Check GitHub for a newer release and prompt / auto-install.
         Updater.shared.store = store
         Updater.shared.start()
+    }
+
+    /// Coalesce the burst of geometry changes a slider drag produces into one rebuild.
+    private func scheduleGeometryRefresh() {
+        geometryRefreshWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.notchWindow?.refreshGeometry() }
+        geometryRefreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+    }
+
+    @objc private func openSettingsAction() { openSettings() }
+
+    /// Open (or focus) the settings window, hosting the SwiftUI settings UI. The app is an
+    /// accessory, so we activate it explicitly to bring a normal window to the front.
+    func openSettings() {
+        if settingsWindow == nil {
+            let root = SettingsView()
+                .environmentObject(store)
+                .environmentObject(AppSettings.shared)
+            let controller = NSHostingController(rootView: root)
+            let win = NSWindow(contentViewController: controller)
+            win.title = "Agent Isle Settings"
+            win.styleMask = [.titled, .closable, .miniaturizable]
+            win.setContentSize(NSSize(width: 820, height: 620))
+            win.isReleasedWhenClosed = false
+            win.center()
+            // In capture mode, anchor top-left so the center notch panel doesn't overlap.
+            if ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] == "1", let scr = NSScreen.main {
+                win.setFrameTopLeftPoint(NSPoint(x: scr.frame.minX + 40, y: scr.frame.maxY - 40))
+                win.level = .floating   // stay above other apps for a clean screenshot
+            }
+            settingsWindow = win
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     /// Terminate other running copies of Agent Isle so only one owns the event port.
@@ -97,6 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.title = "🏝️"
         let menu = NSMenu()
 
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+        menu.addItem(.separator())
+
         let demoItem = NSMenuItem(title: "Demo Mode", action: #selector(toggleDemo), keyEquivalent: "d")
         demoItem.target = self
         demoItem.state = store.demoMode ? .on : .off
@@ -104,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let soundItem = NSMenuItem(title: "Sound Alerts", action: #selector(toggleSound), keyEquivalent: "s")
         soundItem.target = self
-        soundItem.state = SoundPlayer.shared.enabled ? .on : .off
+        soundItem.state = AppSettings.shared.soundEnabled ? .on : .off
         menu.addItem(soundItem)
 
         menu.addItem(.separator())
@@ -185,8 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleSound(_ sender: NSMenuItem) {
-        SoundPlayer.shared.enabled.toggle()
-        sender.state = SoundPlayer.shared.enabled ? .on : .off
+        AppSettings.shared.soundEnabled.toggle()   // persists + syncs SoundPlayer
+        sender.state = AppSettings.shared.soundEnabled ? .on : .off
     }
 
     @objc private func copyHookCommand() {

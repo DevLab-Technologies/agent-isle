@@ -169,6 +169,66 @@ struct AgentQuestion: Equatable {
     var options: [String]
 }
 
+/// One item in an agent's task/todo list (Claude Code's `TodoWrite`).
+struct AgentTask: Identifiable, Equatable {
+    enum State: String, Equatable {
+        case pending        // not started yet — "open"
+        case inProgress     // actively being worked
+        case completed      // done
+
+        /// Accent color for the checkbox and text.
+        var color: Color {
+            switch self {
+            case .completed:  return SessionStatus.done.color
+            case .inProgress: return SessionStatus.working.color
+            case .pending:    return Color(white: 0.55)
+            }
+        }
+
+        /// SF Symbol used for the leading checkbox.
+        var symbol: String {
+            switch self {
+            case .completed:  return "checkmark.circle.fill"
+            case .inProgress: return "circle.dotted"
+            case .pending:    return "circle"
+            }
+        }
+    }
+
+    let id: Int         // position in the list (stable across re-reads of one TodoWrite)
+    var text: String
+    var state: State
+}
+
+/// A session's task list plus the derived counts shown in the summary line.
+struct TaskList: Equatable {
+    var items: [AgentTask]
+
+    var isEmpty: Bool { items.isEmpty }
+    var done: Int { items.filter { $0.state == .completed }.count }
+    var inProgress: Int { items.filter { $0.state == .inProgress }.count }
+    var open: Int { items.filter { $0.state == .pending }.count }
+    var total: Int { items.count }
+
+    /// Reordered for display: active work first, then still-open, then completed —
+    /// so the most relevant items stay visible when the list is truncated.
+    var ordered: [AgentTask] {
+        func rank(_ s: AgentTask.State) -> Int {
+            switch s {
+            case .inProgress: return 0
+            case .pending:    return 1
+            case .completed:  return 2
+            }
+        }
+        return items.enumerated()
+            .sorted { a, b in
+                let ra = rank(a.element.state), rb = rank(b.element.state)
+                return ra != rb ? ra < rb : a.offset < b.offset
+            }
+            .map(\.element)
+    }
+}
+
 /// One piece of a chat message, rendered as its own block in the transcript view.
 enum ChatBlock: Equatable {
     case text(String)
@@ -201,6 +261,7 @@ struct AgentSession: Identifiable, Equatable {
     var updatedAt: Date
     var permission: PermissionRequest?
     var question: AgentQuestion?
+    var tasks: TaskList         // the agent's current todo list (empty when none)
     var tokens: Int             // total tokens used this session (0 if unknown)
     var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
     var terminalBundleID: String?  // real host app bundle id (from the hook's TERM_PROGRAM)
@@ -216,6 +277,7 @@ struct AgentSession: Identifiable, Equatable {
          updatedAt: Date = Date(),
          permission: PermissionRequest? = nil,
          question: AgentQuestion? = nil,
+         tasks: TaskList = TaskList(items: []),
          tokens: Int = 0,
          workspacePath: String? = nil,
          terminalBundleID: String? = nil,
@@ -233,6 +295,7 @@ struct AgentSession: Identifiable, Equatable {
         self.updatedAt = updatedAt
         self.permission = permission
         self.question = question
+        self.tasks = tasks
         self.tokens = tokens
     }
 

@@ -8,6 +8,7 @@ enum TranscriptReader {
         var branch: String?
         var cwd: String?
         var entrypoint: String?
+        var tasks: [AgentTask] = []
     }
 
     /// Generic tail reader: walk the last chunk of a JSONL file newest-first and return
@@ -55,12 +56,13 @@ enum TranscriptReader {
     /// Reads only the last chunk of the file (transcripts can be large) and returns
     /// a human-readable activity line plus session metadata (branch, cwd, entrypoint)
     /// from the most recent entries that carry each field.
-    static func latestActivity(in url: URL, maxBytes: Int = 64 * 1024) -> Activity {
+    static func latestActivity(in url: URL, maxBytes: Int = 128 * 1024) -> Activity {
         let lines = tailLines(of: url, maxBytes: maxBytes)
         var branch: String?
         var cwd: String?
         var entrypoint: String?
         var summary: String?
+        var tasks: [AgentTask]?
 
         // Walk newest -> oldest, filling each field from the first entry that has it.
         for raw in lines.reversed() {
@@ -71,18 +73,47 @@ enum TranscriptReader {
             if cwd == nil, let c = obj["cwd"] as? String, !c.isEmpty { cwd = c }
             if entrypoint == nil, let e = obj["entrypoint"] as? String, !e.isEmpty { entrypoint = e }
 
-            if summary == nil {
+            if summary == nil || tasks == nil,
+               (obj["type"] as? String) == "assistant" || (obj["type"] as? String) == "user",
+               let message = obj["message"] as? [String: Any] {
                 let type = obj["type"] as? String
-                if type == "assistant" || type == "user",
-                   let message = obj["message"] as? [String: Any] {
-                    summary = TranscriptReader.summarize(type: type, content: message["content"])
-                }
+                if summary == nil { summary = TranscriptReader.summarize(type: type, content: message["content"]) }
+                // The newest TodoWrite call holds the session's whole current todo list.
+                if tasks == nil { tasks = todos(from: message["content"]) }
             }
 
-            if branch != nil && cwd != nil && entrypoint != nil && summary != nil { break }
+            if branch != nil && cwd != nil && entrypoint != nil && summary != nil && tasks != nil { break }
         }
         return Activity(text: summary ?? "Session active",
-                        branch: branch, cwd: cwd, entrypoint: entrypoint)
+                        branch: branch, cwd: cwd, entrypoint: entrypoint,
+                        tasks: tasks ?? [])
+    }
+
+    /// Extracts the todo list from a message's content if it contains a `TodoWrite`
+    /// tool call. Claude Code rewrites the entire list on every call, so the most recent
+    /// one is the current state — callers walk newest-first and take the first hit.
+    private static func todos(from content: Any?) -> [AgentTask]? {
+        guard let blocks = content as? [[String: Any]] else { return nil }
+        for block in blocks where (block["type"] as? String) == "tool_use"
+            && (block["name"] as? String) == "TodoWrite" {
+            guard let input = block["input"] as? [String: Any],
+                  let items = input["todos"] as? [[String: Any]] else { return nil }
+            let parsed: [AgentTask] = items.enumerated().compactMap { idx, item in
+                // Prefer the imperative `content`; fall back to `activeForm` if that's all there is.
+                let text = (item["content"] as? String) ?? (item["activeForm"] as? String) ?? ""
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                let state: AgentTask.State
+                switch item["status"] as? String {
+                case "completed":   state = .completed
+                case "in_progress": state = .inProgress
+                default:            state = .pending
+                }
+                return AgentTask(id: idx, text: clamp(trimmed, 140), state: state)
+            }
+            return parsed.isEmpty ? nil : parsed
+        }
+        return nil
     }
 
     // MARK: - Full chat

@@ -11,6 +11,8 @@ import Combine
 final class NotchWindow: NSPanel {
     private var geometry: NotchGeometry
     private let store: SessionStore
+    private let settings: AppSettings
+    private var hosting: NSHostingView<AnyView>?
     private var cancellable: AnyCancellable?
     private var chatCancellable: AnyCancellable?
     private var mouseMonitors: [Any] = []
@@ -22,9 +24,10 @@ final class NotchWindow: NSPanel {
     private let fixedHeight: CGFloat = 500
     private let hitPadding: CGFloat = 10   // enlarge the hit region slightly to steady hover
 
-    init(store: SessionStore) {
+    init(store: SessionStore, settings: AppSettings) {
         self.geometry = NotchGeometry.current()
         self.store = store
+        self.settings = settings
 
         super.init(contentRect: NSRect(x: 0, y: 0, width: 640, height: 500),
                    styleMask: [.borderless, .nonactivatingPanel],
@@ -44,12 +47,12 @@ final class NotchWindow: NSPanel {
         acceptsMouseMovedEvents = true
 
         let container = PassthroughView(frame: NSRect(x: 0, y: 0, width: fixedWidth, height: fixedHeight))
-        let root = IslandRootView(geometry: geometry).environmentObject(store)
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = container.bounds
-        hosting.autoresizingMask = [.width, .height]
-        container.addSubview(hosting)
+        let hostingView = NSHostingView(rootView: makeRoot())
+        hostingView.frame = container.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        container.addSubview(hostingView)
         contentView = container
+        self.hosting = hostingView
 
         positionWindow()
         updateHitRegion(store.islandSize)
@@ -123,7 +126,23 @@ final class NotchWindow: NSPanel {
         (contentView as? PassthroughView)?.interactiveRect = NSRect(x: x, y: y, width: w, height: h)
     }
 
+    /// Builds the island root with its environment objects. Type-erased so the hosting
+    /// view has a stable type across geometry rebuilds.
+    private func makeRoot() -> AnyView {
+        AnyView(IslandRootView(geometry: geometry)
+            .environmentObject(store)
+            .environmentObject(settings))
+    }
+
     func reposition() {
+        positionWindow()
+        updateHitRegion(store.islandSize)
+    }
+
+    /// Recompute notch geometry (after the user tunes it) and rebuild the island.
+    func refreshGeometry() {
+        geometry = NotchGeometry.current()
+        hosting?.rootView = makeRoot()
         positionWindow()
         updateHitRegion(store.islandSize)
     }

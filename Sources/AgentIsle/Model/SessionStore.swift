@@ -278,6 +278,7 @@ final class SessionStore: ObservableObject {
                 s.question = nil
                 s.status = .done
                 s.lastMessage = "Done — click to jump"
+                advanceTasks(&s.tasks)   // complete the active task, start the next
             }
             SoundPlayer.shared.play(.done)
         }
@@ -290,21 +291,53 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Mark the current in-progress task done and promote the next pending one, so the
+    /// demo's progress meter creeps forward on each completed cycle.
+    private func advanceTasks(_ tasks: inout TaskList) {
+        guard !tasks.isEmpty else { return }
+        if let active = tasks.items.firstIndex(where: { $0.state == .inProgress }) {
+            tasks.items[active].state = .completed
+        }
+        if let next = tasks.items.firstIndex(where: { $0.state == .pending }) {
+            tasks.items[next].state = .inProgress
+        }
+    }
+
     static func demoSessions() -> [AgentSession] {
         let now = Date()
+        func tasks(_ items: [(String, AgentTask.State)]) -> TaskList {
+            TaskList(items: items.enumerated().map { AgentTask(id: $0.offset, text: $0.element.0, state: $0.element.1) })
+        }
         return [
-            AgentSession(agent: .claude, title: "fix auth bug", terminal: "iTerm",
-                         lastMessage: "Let me look at the auth module",
-                         status: .working, startedAt: now.addingTimeInterval(-1620)),
+            AgentSession(agent: .claude, title: "island · vibe-clone", terminal: "iTerm",
+                         lastMessage: "Wiring the task list into the session card",
+                         status: .working, startedAt: now.addingTimeInterval(-1620),
+                         updatedAt: now,
+                         tasks: tasks([
+                            ("Scaffold SwiftPM macOS app + notch panel", .completed),
+                            ("Build Dynamic Island SwiftUI view", .completed),
+                            ("Parse Claude transcripts for live status", .completed),
+                            ("Render the agent task list in each card", .inProgress),
+                            ("Add progress meter and overflow collapse", .pending),
+                            ("Polish typography and spacing", .pending),
+                         ])),
             AgentSession(agent: .codex, title: "backend server", terminal: "Terminal",
                          lastMessage: "Building the REST endpoints",
-                         status: .working, startedAt: now.addingTimeInterval(-3600)),
+                         status: .working, startedAt: now.addingTimeInterval(-3600),
+                         updatedAt: now.addingTimeInterval(-40),
+                         tasks: tasks([
+                            ("Design the schema", .completed),
+                            ("Implement /auth endpoints", .inProgress),
+                            ("Add integration tests", .pending),
+                         ])),
             AgentSession(agent: .gemini, title: "optimize queries", terminal: "Ghostty",
                          lastMessage: "Analyzing the slow queries",
-                         status: .working, startedAt: now.addingTimeInterval(-18000)),
+                         status: .working, startedAt: now.addingTimeInterval(-18000),
+                         updatedAt: now.addingTimeInterval(-80)),
             AgentSession(agent: .cursor, title: "refactor ui", terminal: "VS Code",
                          lastMessage: "Waiting for input",
-                         status: .idle, startedAt: now.addingTimeInterval(-600))
+                         status: .idle, startedAt: now.addingTimeInterval(-600),
+                         updatedAt: now.addingTimeInterval(-120))
         ]
     }
 }

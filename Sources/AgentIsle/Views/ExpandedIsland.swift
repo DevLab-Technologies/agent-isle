@@ -5,13 +5,14 @@ struct ExpandedIsland: View {
     let notchWidth: CGFloat
     let notchHeight: CGFloat
     @EnvironmentObject var store: SessionStore
+    @EnvironmentObject var settings: AppSettings
 
-    private var panelWidth: CGFloat { max(440, notchWidth + 280) }
+    private var panelWidth: CGFloat { max(440, CGFloat(settings.maxPanelWidth)) }
 
     var body: some View {
         VStack(spacing: 0) {
             notchBar           // occupies the physical-notch band; content only in the ears
-            Divider().overlay(Color.white.opacity(0.06))
+            Divider().overlay(Theme.Fill.hairline)
             if let session = store.openedSession {
                 SessionChatView(session: session)
             } else {
@@ -41,7 +42,7 @@ struct ExpandedIsland: View {
                 Text("AGENT ISLE")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(Theme.Ink.primary)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -53,9 +54,9 @@ struct ExpandedIsland: View {
                 if store.attentionCount > 0 {
                     CountBadge(count: store.attentionCount, color: SessionStatus.waiting.color)
                 }
-                Text("\(store.sessions.count) agents")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.45))
+                Text("\(store.sessions.count) \(store.sessions.count == 1 ? "agent" : "agents")")
+                    .font(Theme.Font.label(10))
+                    .foregroundStyle(Theme.Ink.tertiary)
                     .lineLimit(1)
                 settingsMenu
             }
@@ -69,9 +70,10 @@ struct ExpandedIsland: View {
     /// item can be hidden behind the notch on notched Macs.
     private var settingsMenu: some View {
         Menu {
-            Button(SoundPlayer.shared.enabled ? "Mute Sound Alerts" : "Enable Sound Alerts") {
-                SoundPlayer.shared.enabled.toggle()
+            Button("Settings…") {
+                NotificationCenter.default.post(name: .openAgentIsleSettings, object: nil)
             }
+            Divider()
             Button(store.demoMode ? "Stop Demo Mode" : "Start Demo Mode") {
                 store.demoMode ? store.stopDemo() : store.startDemo()
             }
@@ -103,13 +105,13 @@ struct ExpandedIsland: View {
 
     private var sessionList: some View {
         ScrollView {
-            VStack(spacing: 8) {
+            VStack(spacing: Theme.Space.md) {
                 if store.sessions.isEmpty {
                     welcomeState
                 } else if store.visibleSessions.isEmpty {
                     Text(emptyMessage)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.35))
+                        .font(Theme.Font.body(11))
+                        .foregroundStyle(Theme.Ink.faint)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 28)
                 } else {
@@ -118,9 +120,9 @@ struct ExpandedIsland: View {
                     }
                 }
             }
-            .padding(12)
+            .padding(Theme.Space.lg)
         }
-        .frame(maxHeight: 340)
+        .frame(maxHeight: CGFloat(settings.maxPanelHeight))
     }
 
     /// Shown on a fresh install when nothing is running yet.
