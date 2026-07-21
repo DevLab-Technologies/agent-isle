@@ -1,6 +1,8 @@
 # Agent Isle
 
 [![build](https://github.com/DevLab-Technologies/agent-isle/actions/workflows/build.yml/badge.svg)](https://github.com/DevLab-Technologies/agent-isle/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/DevLab-Technologies/agent-isle?sort=semver)](https://github.com/DevLab-Technologies/agent-isle/releases/latest)
+[![Total downloads](https://img.shields.io/github/downloads/DevLab-Technologies/agent-isle/total.svg)](https://github.com/DevLab-Technologies/agent-isle/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
 ![Platform: macOS 14+](https://img.shields.io/badge/Platform-macOS%2014%2B-lightgrey.svg)
 
@@ -36,10 +38,19 @@ Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB R
 - **Fully local** — the only moving part is a `localhost` event server; nothing leaves
   your machine.
 
+## Download
+
+Grab the latest prebuilt app from the [Releases page](https://github.com/DevLab-Technologies/agent-isle/releases/latest)
+— the current release is **v1.3**. Download `Agent-Isle.zip`, unzip it, and drag
+**Agent Isle.app** to `/Applications`. Across all releases the app has been downloaded
+**50+ times**.
+
+Prefer to build from source? See [Build & run](#build--run) below.
+
 ## Requirements
 
 - macOS 14 (Sonoma) or later, Apple Silicon or Intel
-- Xcode / Swift 5.9+ toolchain (to build)
+- Xcode / Swift 5.9+ toolchain (to build from source)
 
 ## Build & run
 
