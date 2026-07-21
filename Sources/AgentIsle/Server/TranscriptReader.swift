@@ -76,7 +76,12 @@ enum TranscriptReader {
     /// a human-readable activity line plus session metadata (branch, cwd, entrypoint)
     /// from the most recent entries that carry each field.
     static func latestActivity(in url: URL, maxBytes: Int = 96 * 1024) -> Activity {
-        let lines = tailLines(of: url, maxBytes: maxBytes)
+        // Decode the tail once and share it with both scans below.
+        let objs: [[String: Any]] = tailLines(of: url, maxBytes: maxBytes).compactMap { line in
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            return obj
+        }
         var branch: String?
         var cwd: String?
         var entrypoint: String?
@@ -85,10 +90,7 @@ enum TranscriptReader {
         var tasks: [AgentTask]?
 
         // Walk newest -> oldest, filling each field from the first entry that has it.
-        for raw in lines.reversed() {
-            guard let data = raw.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-
+        for obj in objs.reversed() {
             if branch == nil, let b = obj["gitBranch"] as? String, !b.isEmpty { branch = b }
             if cwd == nil, let c = obj["cwd"] as? String, !c.isEmpty { cwd = c }
             if entrypoint == nil, let e = obj["entrypoint"] as? String, !e.isEmpty { entrypoint = e }
@@ -112,7 +114,7 @@ enum TranscriptReader {
         return Activity(text: summary ?? "Session active",
                         branch: branch, cwd: cwd, entrypoint: entrypoint,
                         model: model, tasks: tasks ?? [],
-                        question: pendingQuestion(in: lines))
+                        question: pendingQuestion(in: objs))
     }
 
     /// Detects an unanswered `AskUserQuestion` in the transcript tail — the poll-path
@@ -125,14 +127,12 @@ enum TranscriptReader {
     /// `tool_result`, a later assistant turn, or a human prompt. That guards against hosts
     /// that record the answer as a plain continuation rather than a tool_result (otherwise
     /// the card could linger forever with no way to clear it).
-    private static func pendingQuestion(in lines: [String]) -> AgentQuestion? {
-        // Parse the real turns (skip meta rows: attachments, system notices, etc.).
+    private static func pendingQuestion(in objs: [[String: Any]]) -> AgentQuestion? {
+        // Keep the real turns (skip meta rows: attachments, system notices, etc.).
         struct Turn { let role: String; let blocks: [[String: Any]]; let text: String? }
         var turns: [Turn] = []
-        for raw in lines {
-            guard let data = raw.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = obj["type"] as? String, type == "user" || type == "assistant",
+        for obj in objs {
+            guard let type = obj["type"] as? String, type == "user" || type == "assistant",
                   let message = obj["message"] as? [String: Any] else { continue }
             if let blocks = message["content"] as? [[String: Any]] {
                 turns.append(Turn(role: type, blocks: blocks, text: nil))
