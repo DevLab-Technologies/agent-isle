@@ -8,6 +8,7 @@ enum TranscriptReader {
         var branch: String?
         var cwd: String?
         var entrypoint: String?
+        var model: String?
         var tasks: [AgentTask] = []
     }
 
@@ -20,6 +21,20 @@ enum TranscriptReader {
             guard let d = raw.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
             if let t = transform(obj), !t.isEmpty { return firstLine(t) }
+        }
+        return nil
+    }
+
+    /// The most recent model id recorded in a JSONL history, checked both at the top level
+    /// and inside a nested `message` object (agents differ on where they put it). Walks
+    /// newest-first so a mid-session model switch wins. Best-effort — nil when none present.
+    static func latestModel(inJSONL url: URL, maxBytes: Int = 96 * 1024) -> String? {
+        for raw in tailLines(of: url, maxBytes: maxBytes).reversed() {
+            guard let d = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            if let m = obj["model"] as? String, !m.isEmpty, m != "<synthetic>" { return m }
+            if let msg = obj["message"] as? [String: Any],
+               let m = msg["model"] as? String, !m.isEmpty, m != "<synthetic>" { return m }
         }
         return nil
     }
@@ -61,6 +76,7 @@ enum TranscriptReader {
         var branch: String?
         var cwd: String?
         var entrypoint: String?
+        var model: String?
         var summary: String?
         var tasks: [AgentTask]?
 
@@ -73,20 +89,25 @@ enum TranscriptReader {
             if cwd == nil, let c = obj["cwd"] as? String, !c.isEmpty { cwd = c }
             if entrypoint == nil, let e = obj["entrypoint"] as? String, !e.isEmpty { entrypoint = e }
 
-            if summary == nil || tasks == nil,
-               (obj["type"] as? String) == "assistant" || (obj["type"] as? String) == "user",
+            if (obj["type"] as? String) == "assistant" || (obj["type"] as? String) == "user",
                let message = obj["message"] as? [String: Any] {
                 let type = obj["type"] as? String
                 if summary == nil { summary = TranscriptReader.summarize(type: type, content: message["content"]) }
                 // The newest TodoWrite call holds the session's whole current todo list.
                 if tasks == nil { tasks = todos(from: message["content"]) }
+                // The model of the most recent assistant turn is the session's current model
+                // (a mid-session `/model` switch shows up as a newer entry, seen first here).
+                if model == nil, let m = message["model"] as? String, m != "<synthetic>" {
+                    model = ModelName.pretty(m)
+                }
             }
 
-            if branch != nil && cwd != nil && entrypoint != nil && summary != nil && tasks != nil { break }
+            if branch != nil && cwd != nil && entrypoint != nil
+                && model != nil && summary != nil && tasks != nil { break }
         }
         return Activity(text: summary ?? "Session active",
                         branch: branch, cwd: cwd, entrypoint: entrypoint,
-                        tasks: tasks ?? [])
+                        model: model, tasks: tasks ?? [])
     }
 
     /// Extracts the todo list from a message's content if it contains a `TodoWrite`

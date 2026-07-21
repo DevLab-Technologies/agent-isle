@@ -179,6 +179,7 @@ final class EventServer {
                 s.status = status
                 if let msg = event.message { s.lastMessage = msg }
                 if let title = event.title { s.title = title }
+                if let model = ModelName.pretty(event.model) { s.model = model }
                 // The hook knows the real host terminal from TERM_PROGRAM — trust it.
                 if let term = event.terminal { s.terminal = term }
                 if let bundle = event.term_bundle { s.terminalBundleID = bundle }
@@ -200,6 +201,7 @@ final class EventServer {
                      status: status,
                      permission: permission,
                      question: question,
+                     model: ModelName.pretty(event.model),
                      terminalBundleID: event.term_bundle)
     }
 
@@ -327,6 +329,7 @@ struct AgentEvent: Decodable {
     var term_bundle: String?         // host app bundle id for precise Jump
     var message: String?
     var status: String?              // working | waiting | idle ...
+    var model: String?               // raw model id, e.g. "claude-opus-4-8" (prettified for display)
 
     // permission fields
     var tool: String?

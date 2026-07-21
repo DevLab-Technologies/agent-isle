@@ -119,6 +119,10 @@ struct DisplaySettings: View {
                 SettingsRow(title: "Show Token Count") {
                     Toggle("", isOn: $settings.showTokens).labelsHidden().toggleStyle(.switch)
                 }
+                SettingsRow(title: "Show Model",
+                            subtitle: "Display the model each session is running, e.g. Opus 4.8.") {
+                    Toggle("", isOn: $settings.showModel).labelsHidden().toggleStyle(.switch)
+                }
                 SettingsRow(title: "Show Terminal", showsDivider: false) {
                     Toggle("", isOn: $settings.showTerminal).labelsHidden().toggleStyle(.switch)
                 }

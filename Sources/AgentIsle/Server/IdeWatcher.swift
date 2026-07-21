@@ -84,6 +84,9 @@ final class IdeWatcher {
                     if s.terminalBundleID == nil { s.terminal = terminal }
                     s.lastMessage = activity.text
                     s.tokens = tokens
+                    // Only update the model when this tail actually carried one; a chunk
+                    // without an assistant turn shouldn't wipe a model we already know.
+                    if let model = activity.model { s.model = model }
                     s.workspacePath = activity.cwd
                     s.transcriptURL = c.url
                     // Only replace tasks when this scan actually found a TodoWrite; a tail
@@ -107,6 +110,7 @@ final class IdeWatcher {
                     updatedAt: c.mtime,
                     tasks: TaskList(items: activity.tasks),
                     tokens: tokens,
+                    model: activity.model,
                     workspacePath: activity.cwd,
                     transcriptURL: c.url))
             }
@@ -120,6 +124,7 @@ final class IdeWatcher {
                 store.update(id: e.id) { s in
                     s.title = e.title
                     s.lastMessage = e.lastMessage
+                    if let model = e.model { s.model = model }
                     s.workspacePath = e.cwd
                     s.transcriptURL = e.historyURL
                     s.status = working ? .working : .idle
@@ -129,7 +134,7 @@ final class IdeWatcher {
                 store.upsert(AgentSession(
                     id: e.id, agent: e.agent, title: e.title, terminal: e.terminal,
                     lastMessage: e.lastMessage, status: working ? .working : .idle,
-                    startedAt: e.mtime, updatedAt: e.mtime, workspacePath: e.cwd,
+                    startedAt: e.mtime, updatedAt: e.mtime, model: e.model, workspacePath: e.cwd,
                     transcriptURL: e.historyURL))
             }
         }

@@ -289,6 +289,7 @@ struct AgentSession: Identifiable, Equatable {
     var question: AgentQuestion?
     var tasks: TaskList         // the agent's current todo list (empty when none)
     var tokens: Int             // total tokens used this session (0 if unknown)
+    var model: String?          // display name of the current model, e.g. "Opus 4.8" (nil if unknown)
     var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
     var terminalBundleID: String?  // real host app bundle id (from the hook's TERM_PROGRAM)
     var transcriptURL: URL?     // on-disk conversation file (Claude/Grok/Copilot), for the live chat view
@@ -305,6 +306,7 @@ struct AgentSession: Identifiable, Equatable {
          question: AgentQuestion? = nil,
          tasks: TaskList = TaskList(items: []),
          tokens: Int = 0,
+         model: String? = nil,
          workspacePath: String? = nil,
          terminalBundleID: String? = nil,
          transcriptURL: URL? = nil) {
@@ -323,6 +325,7 @@ struct AgentSession: Identifiable, Equatable {
         self.question = question
         self.tasks = tasks
         self.tokens = tokens
+        self.model = model
     }
 
     /// Compact human-readable token count, e.g. "48.2k" or "1.3M" (nil when unknown).
