@@ -22,11 +22,12 @@ Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB R
   click into a full panel of every running agent session.
 - **Multi-agent, hook-free monitoring** — reads each tool's own session history:
   - **Claude Code** — terminal, VS Code, Cursor, and Desktop sessions
+  - **Cursor CLI** (`cursor-agent`) — read straight from its `~/.cursor/chats` store
   - **Grok CLI** and **GitHub Copilot CLI**
 - **Live status** — each session shows working / idle, its latest activity line, git
   branch, elapsed time, and token usage.
-- **Approve from the notch** — for Claude Code, permission requests render an inline
-  diff with Deny (⌘N) / Allow (⌘Y); the decision flows straight back to the agent.
+- **Approve from the notch** — for Claude Code and Cursor, permission requests render an
+  inline diff with Deny (⌘N) / Allow (⌘Y); the decision flows straight back to the agent.
 - **Answer questions** — multiple-choice prompts answered right in the island.
 - **Click to jump** — click a session to focus its terminal or IDE (detected via
   `TERM_PROGRAM`, so a session in VS Code's integrated terminal opens VS Code).
@@ -60,6 +61,15 @@ toggle demo/sound from the gear menu in the expanded island.
 ```bash
 bash Scripts/install-hooks.sh   # adds hooks to ~/.claude/settings.json
 bash Scripts/uninstall-hooks.sh # remove them (monitoring still works)
+```
+
+**Cursor CLI** (`cursor-agent`) — monitoring works with no setup (Agent Isle reads the
+per-session SQLite `store.db` under `~/.cursor/chats`). To also approve shell, MCP, and
+file-edit calls from the notch:
+
+```bash
+bash Scripts/install-cursor-hooks.sh   # adds hooks to ~/.cursor/hooks.json (preserves others)
+bash Scripts/uninstall-cursor-hooks.sh # remove them (monitoring still works)
 ```
 
 **Grok CLI / GitHub Copilot CLI** — detected automatically from `~/.grok/sessions`
@@ -109,7 +119,10 @@ Sources/AgentIsle/
     EventServer.swift     Localhost HTTP listener; parks blocking requests
     IdeWatcher.swift      Hook-free Claude Code session discovery (transcripts)
     TranscriptReader.swift Tails transcripts for activity + token totals
-    ExternalAgents.swift  Adapters for Grok / Copilot
+    ExternalAgents.swift  Adapters for Cursor / Grok / Copilot
+    CursorStore.swift     Reads Cursor's SQLite store.db (meta + blob DAG)
+    HookInstaller.swift   Register/remove Claude Code hooks from the app
+    CursorHookInstaller.swift  Same for Cursor's ~/.cursor/hooks.json
     Jumper.swift          Focus a session's terminal/IDE
   Sound/
     SoundPlayer.swift     Runtime-synthesized square-wave alerts
@@ -119,6 +132,9 @@ Scripts/
   install-hooks.sh        Register Claude Code hooks
   uninstall-hooks.sh      Remove them
   agent-isle-hook.py      Claude Code -> island bridge (approvals from the notch)
+  install-cursor-hooks.sh Register Cursor hooks
+  uninstall-cursor-hooks.sh Remove them
+  agent-isle-cursor-hook.py Cursor -> island bridge (approvals from the notch)
   make_icon.py            Generate the app icon
 ```
 

@@ -26,6 +26,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN" "$CONTENTS/MacOS/AgentIsle"
 cp "$ROOT/Sources/AgentIsle/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 cp "$ROOT/Scripts/agent-isle-hook.py" "$CONTENTS/Resources/agent-isle-hook.py"
+cp "$ROOT/Scripts/agent-isle-cursor-hook.py" "$CONTENTS/Resources/agent-isle-cursor-hook.py"
 
 # Quoted heredoc: nothing here is shell-expanded. The version is injected afterward
 # with PlistBuddy so a stray `$` in the template can never break the build.

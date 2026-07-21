@@ -13,6 +13,7 @@ enum ChatHistory {
         switch agent {
         case .grok:    return grok(url, limit: limit)
         case .copilot: return copilot(url, limit: limit)
+        case .cursor:  return CursorStore.messages(at: url, limit: limit)
         default:       return TranscriptReader.messages(in: url, limit: limit)
         }
     }
@@ -21,7 +22,7 @@ enum ChatHistory {
     /// unsupported agent (or with no file yet) show the "no history" notice instead.
     static func isSupported(_ agent: AgentKind) -> Bool {
         switch agent {
-        case .claude, .grok, .copilot: return true
+        case .claude, .grok, .copilot, .cursor: return true
         default: return false
         }
     }

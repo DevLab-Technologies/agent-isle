@@ -21,6 +21,7 @@ enum ExternalAgents {
         var out: [ExternalSession] = []
         out += Grok.scan(activeWindow: activeWindow, limit: maxPerAgent)
         out += Copilot.scan(activeWindow: activeWindow, limit: maxPerAgent)
+        out += Cursor.scan(activeWindow: activeWindow, limit: maxPerAgent)
         return out
     }
 
@@ -118,6 +119,51 @@ enum ExternalAgents {
         }
     }
 
+    // MARK: - Cursor CLI  (~/.cursor/chats/<md5-of-cwd>/<session-uuid>/store.db)
+
+    enum Cursor {
+        static func scan(activeWindow: TimeInterval, limit: Int) -> [ExternalSession] {
+            let root = home.appendingPathComponent(".cursor/chats")
+            let fm = FileManager.default
+            guard let workspaceDirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+
+            var found: [ExternalSession] = []
+            let now = Date()
+            for workspaceDir in workspaceDirs where workspaceDir.hasDirectoryPath {
+                guard let sessionDirs = try? fm.contentsOfDirectory(at: workspaceDir, includingPropertiesForKeys: nil) else { continue }
+                for sess in sessionDirs where sess.hasDirectoryPath {
+                    let db = sess.appendingPathComponent("store.db")
+                    // The WAL sidecar is what changes on a live write, so it dates activity
+                    // more reliably than store.db itself.
+                    let mtime = [db, db.appendingPathExtension("db-wal"),
+                                 sess.appendingPathComponent("store.db-wal")]
+                        .compactMap(modDate).max()
+                    guard let mtime, fm.fileExists(atPath: db.path),
+                          now.timeIntervalSince(mtime) < activeWindow else { continue }
+
+                    // One open per session: metadata + activity line + cwd, without
+                    // loading the whole blob table (the scan runs every couple seconds).
+                    let summary = CursorStore.summary(at: db)
+                    let cwd = summary?.workspacePath
+                    let title = summary?.meta.name?.nilIfEmpty
+                        ?? cwd.map { ($0 as NSString).lastPathComponent }
+                        ?? "cursor"
+                    found.append(ExternalSession(
+                        id: UUID.deterministic(from: "cursor:" + (summary?.meta.agentId ?? sess.lastPathComponent)),
+                        agent: .cursor,
+                        terminal: "Cursor CLI",
+                        title: title,
+                        lastMessage: summary?.lastMessage ?? "Session active",
+                        cwd: cwd,
+                        mtime: mtime,
+                        model: ModelName.pretty(summary?.meta.lastUsedModel),
+                        historyURL: db))
+                }
+            }
+            return topN(found, limit)
+        }
+    }
+
     // MARK: - Helpers
 
     private static func modDate(_ url: URL) -> Date? {
@@ -127,4 +173,8 @@ enum ExternalAgents {
     private static func topN(_ sessions: [ExternalSession], _ n: Int) -> [ExternalSession] {
         Array(sessions.sorted { $0.mtime > $1.mtime }.prefix(n))
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
