@@ -9,6 +9,7 @@ struct ExternalSession {
     let lastMessage: String
     let cwd: String?
     let mtime: Date
+    let model: String?    // display name of the model, e.g. "Grok 4" (nil if the format hides it)
     let historyURL: URL   // on-disk conversation file, parsed by ChatHistory for the chat view
 }
 
@@ -52,6 +53,7 @@ enum ExternalAgents {
                         lastMessage: msg ?? "Session active",
                         cwd: cwd,
                         mtime: mtime,
+                        model: ModelName.pretty(TranscriptReader.latestModel(inJSONL: history)),
                         historyURL: history))
                 }
             }
@@ -97,6 +99,9 @@ enum ExternalAgents {
                 }
                 let text = (last?["content"] as? String).map { String($0.prefix(90)) } ?? "Session active"
                 let cwd = obj["cwd"] as? String ?? obj["workspaceFolder"] as? String
+                // Model may sit at the top level or on the latest message that records one.
+                let rawModel = (obj["model"] as? String)
+                    ?? messages.compactMap { $0["model"] as? String }.last
 
                 found.append(ExternalSession(
                     id: UUID.deterministic(from: "copilot:" + sessionID),
@@ -106,6 +111,7 @@ enum ExternalAgents {
                     lastMessage: text,
                     cwd: cwd,
                     mtime: mtime,
+                    model: ModelName.pretty(rawModel),
                     historyURL: file))
             }
             return topN(found, limit)

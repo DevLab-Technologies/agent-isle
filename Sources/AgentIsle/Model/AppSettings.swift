@@ -35,6 +35,7 @@ final class AppSettings: ObservableObject {
     @Published var showTokens: Bool { didSet { d.set(showTokens, forKey: Key.showTokens) } }
     @Published var showTerminal: Bool { didSet { d.set(showTerminal, forKey: Key.showTerminal) } }
     @Published var showTasks: Bool { didSet { d.set(showTasks, forKey: Key.showTasks) } }
+    @Published var showModel: Bool { didSet { d.set(showModel, forKey: Key.showModel) } }
 
     // MARK: Display / notch tuning
     /// Manual offsets (pts) added to the OS-reported notch size; 0 uses the API value.
@@ -54,6 +55,7 @@ final class AppSettings: ObservableObject {
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
         static let showTasks = "showTasks"
+        static let showModel = "showModel"
         static let notchWidthAdjust = DefaultsKeys.notchWidthAdjust
         static let notchHeightAdjust = DefaultsKeys.notchHeightAdjust
         static let maxPanelWidth = "maxPanelWidth"
@@ -68,6 +70,7 @@ final class AppSettings: ObservableObject {
             Key.showTokens: true,
             Key.showTerminal: true,
             Key.showTasks: true,
+            Key.showModel: true,
             Key.notchWidthAdjust: 0,
             Key.notchHeightAdjust: 0,
             Key.maxPanelWidth: 480,
@@ -79,6 +82,7 @@ final class AppSettings: ObservableObject {
         showTokens = d.bool(forKey: Key.showTokens)
         showTerminal = d.bool(forKey: Key.showTerminal)
         showTasks = d.bool(forKey: Key.showTasks)
+        showModel = d.bool(forKey: Key.showModel)
         notchWidthAdjust = d.double(forKey: Key.notchWidthAdjust)
         notchHeightAdjust = d.double(forKey: Key.notchHeightAdjust)
         maxPanelWidth = d.double(forKey: Key.maxPanelWidth)

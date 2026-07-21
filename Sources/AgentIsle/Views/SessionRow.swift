@@ -74,6 +74,15 @@ struct SessionRow: View {
                 // Status + terminal + token meter, the calm bottom line.
                 HStack(spacing: Theme.Space.sm) {
                     StatusPill(status: session.status)
+                    if settings.showModel, let model = session.model {
+                        Text(model)
+                            .font(Theme.Font.label(9, weight: .medium))
+                            .foregroundStyle(session.agent.tint)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Capsule().fill(session.agent.tint.opacity(0.12)))
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                     if settings.showTerminal {
                         Text(session.terminal)
                             .font(Theme.Font.label(9.5, weight: .regular))
