@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Carbon.HIToolbox
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -12,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hookMenuItem: NSMenuItem?
     private var cursorHookMenuItem: NSMenuItem?
     private var autoUpdateMenuItem: NSMenuItem?
+    private var switcherHotKey: GlobalHotKey?
+    private var switcherPanel: SwitcherPanel?
 
     /// The menu-bar session panel (menu-bar / both modes). Built lazily on first open.
     private var panelPopover: NSPopover?
@@ -111,6 +114,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Check GitHub for a newer release and prompt / auto-install.
         Updater.shared.store = store
         Updater.shared.start()
+
+        // Global session switcher. Skip in capture modes so it doesn't interfere.
+        if !settingsCapture && !demoLaunch {
+            registerSwitcherHotKey()
+        }
+    }
+
+    // MARK: - Global session switcher
+
+    // TODO: make the chord user-configurable (AppSettings) — fixed at ⌥⌘Space for now.
+    private func registerSwitcherHotKey() {
+        switcherHotKey = GlobalHotKey(keyCode: UInt32(kVK_Space),
+                                      modifiers: UInt32(cmdKey | optionKey)) { [weak self] in
+            Task { @MainActor in self?.toggleSwitcher() }
+        }
+    }
+
+    private func toggleSwitcher() {
+        if switcherPanel != nil {
+            closeSwitcher()
+        } else {
+            showSwitcher()
+        }
+    }
+
+    private func showSwitcher() {
+        let panel = SwitcherPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
+                                  styleMask: [.borderless, .nonactivatingPanel],
+                                  backing: .buffered, defer: false)
+        panel.isFloatingPanel = true
+        panel.level = .modalPanel
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.onResignKey = { [weak self] in
+            Task { @MainActor in self?.closeSwitcher() }
+        }
+
+        let root = SwitcherView(
+            store: store,
+            onSelect: { [weak self] session in
+                self?.closeSwitcher()
+                Jumper.jump(to: session)
+            },
+            onDismiss: { [weak self] in self?.closeSwitcher() })
+            .environmentObject(store)
+            .environmentObject(AppSettings.shared)
+
+        let hosting = NSHostingView(rootView: root)
+        panel.contentView = hosting
+        let size = hosting.fittingSize
+        panel.setContentSize(size)
+
+        if let screen = NSScreen.main {
+            let f = screen.visibleFrame
+            let origin = NSPoint(x: f.midX - size.width / 2,
+                                 y: f.midY - size.height / 2 + f.height * 0.12)
+            panel.setFrameOrigin(origin)
+        } else {
+            panel.center()
+        }
+
+        switcherPanel = panel
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func closeSwitcher() {
+        guard let panel = switcherPanel else { return }
+        switcherPanel = nil          // clear first so resignKey's callback is a no-op
+        panel.onResignKey = nil
+        panel.orderOut(nil)
     }
 
     /// Coalesce the burst of geometry changes a slider drag produces into one rebuild.

@@ -30,6 +30,32 @@ struct ExpandedIsland: View {
         )
         .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
         .fixedSize()
+        .background(panelHotkeys)
+    }
+
+    /// Panel-wide shortcuts, active while the expanded island is the key window: Esc
+    /// collapses (closing an open chat first), ⌘J jumps to the focused session. Hidden
+    /// zero-size buttons so the chords register without occupying layout.
+    private var panelHotkeys: some View {
+        ZStack {
+            Button("", action: collapse)
+                .keyboardShortcut(.cancelAction)
+            Button("", action: jumpToFocused)
+                .keyboardShortcut("j", modifiers: .command)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    private func collapse() {
+        if store.openedSessionID != nil { store.closeChat() }
+        store.isExpanded = false
+    }
+
+    private func jumpToFocused() {
+        guard let target = store.openedSession ?? store.focusSession else { return }
+        Jumper.jump(to: target)
     }
 
     /// The top band aligned with the physical notch: brand in the left ear, counts in
