@@ -65,7 +65,14 @@ struct SessionChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // A plain VStack (not LazyVStack): the message list is capped at 80 rows,
+                // so laziness buys nothing — and a LazyVStack has no stable ideal height,
+                // which sends the layout engine into an unbounded prefetch/size loop once
+                // ExpandedIsland's `.fixedSize()` measures the scroll view with an ideal
+                // (unbounded) height proposal. A VStack reports a definite ideal height, so
+                // `.frame(maxHeight:)` bounds the scroll view exactly as it does for the
+                // session list.
+                VStack(alignment: .leading, spacing: 10) {
                     if store.openedMessages.isEmpty {
                         emptyState
                     } else {
