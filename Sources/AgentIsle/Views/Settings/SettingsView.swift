@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The sections shown in the settings sidebar.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, integrations, display, sound, usage, about
+    case general, integrations, display, filters, sound, usage, about
     var id: String { rawValue }
 
     var title: String {
@@ -10,6 +10,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .integrations: return "Integrations"
         case .display: return "Display"
+        case .filters: return "Filters"
         case .sound: return "Sound"
         case .usage: return "Usage"
         case .about: return "About"
@@ -21,6 +22,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: return "gearshape.fill"
         case .integrations: return "puzzlepiece.extension.fill"
         case .display: return "textformat.size"
+        case .filters: return "line.3.horizontal.decrease.circle.fill"
         case .sound: return "speaker.wave.2.fill"
         case .usage: return "chart.bar.fill"
         case .about: return "info.circle.fill"
@@ -32,6 +34,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: return .gray
         case .integrations: return .blue
         case .display: return .purple
+        case .filters: return .orange
         case .sound: return .green
         case .usage: return .pink
         case .about: return .blue
@@ -108,6 +111,7 @@ struct SettingsView: View {
         case .general:      GeneralSettings()
         case .integrations: IntegrationsSettings()
         case .display:      DisplaySettings()
+        case .filters:      FiltersSettings()
         case .sound:        SoundSettings()
         case .usage:        UsageSettings(usage: usage)
         case .about:        AboutSettings()

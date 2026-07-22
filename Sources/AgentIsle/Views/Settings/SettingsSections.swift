@@ -36,6 +36,27 @@ struct GeneralSettings: View {
                 }
             }
 
+            SettingsGroup(title: "Quiet Scenes",
+                          footnote: "Automatically mute sound and notifications while you're in a Focus, your screen is locked, or your screen is being recorded. The island keeps updating — only the alerts are silenced.") {
+                SettingsRow(title: "Enable Quiet Scenes",
+                            subtitle: "Suppress alerts during do-not-disturb moments.",
+                            showsDivider: settings.quietScenesEnabled) {
+                    Toggle("", isOn: $settings.quietScenesEnabled).labelsHidden().toggleStyle(.switch)
+                }
+                if settings.quietScenesEnabled {
+                    SettingsRow(title: "During Focus / Do Not Disturb") {
+                        Toggle("", isOn: $settings.quietDuringFocus).labelsHidden().toggleStyle(.switch)
+                    }
+                    SettingsRow(title: "When Screen Is Locked") {
+                        Toggle("", isOn: $settings.quietWhenLocked).labelsHidden().toggleStyle(.switch)
+                    }
+                    SettingsRow(title: "While Recording or Sharing Screen",
+                                showsDivider: false) {
+                        Toggle("", isOn: $settings.quietWhenScreenSharing).labelsHidden().toggleStyle(.switch)
+                    }
+                }
+            }
+
             SettingsGroup(title: "Behavior") {
                 SettingsRow(title: "Demo Mode",
                             subtitle: "Show simulated sessions to preview the island.") {

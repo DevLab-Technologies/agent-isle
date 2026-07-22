@@ -43,7 +43,7 @@ final class AppSettings: ObservableObject {
 
     // MARK: Sound
     @Published var soundEnabled: Bool {
-        didSet { d.set(soundEnabled, forKey: Key.soundEnabled); SoundPlayer.shared.enabled = soundEnabled }
+        didSet { d.set(soundEnabled, forKey: Key.soundEnabled); applyMuting() }
     }
     /// 0…1; scales the synthesized chiptune amplitude (see `SoundPlayer`).
     @Published var soundVolume: Double {
@@ -52,7 +52,33 @@ final class AppSettings: ObservableObject {
 
     // MARK: Notifications
     @Published var notificationsEnabled: Bool {
-        didSet { d.set(notificationsEnabled, forKey: Key.notificationsEnabled); Notifier.shared.enabled = notificationsEnabled }
+        didSet { d.set(notificationsEnabled, forKey: Key.notificationsEnabled); applyMuting() }
+    }
+
+    // MARK: Quiet scenes
+    /// Master toggle: auto-mute sound + notifications during Focus, screen-lock, or
+    /// screen-sharing. The per-scene toggles below refine which scenes count.
+    @Published var quietScenesEnabled: Bool {
+        didSet { d.set(quietScenesEnabled, forKey: Key.quietScenesEnabled); pushQuietConfig() }
+    }
+    @Published var quietDuringFocus: Bool {
+        didSet { d.set(quietDuringFocus, forKey: Key.quietDuringFocus); pushQuietConfig() }
+    }
+    @Published var quietWhenLocked: Bool {
+        didSet { d.set(quietWhenLocked, forKey: Key.quietWhenLocked); pushQuietConfig() }
+    }
+    @Published var quietWhenScreenSharing: Bool {
+        didSet { d.set(quietWhenScreenSharing, forKey: Key.quietWhenScreenSharing); pushQuietConfig() }
+    }
+
+    // MARK: Session filters
+    /// User-defined rules that hide matching sessions from the island. Persisted as JSON.
+    @Published var sessionFilters: [SessionFilter] {
+        didSet { persistFilters() }
+    }
+    /// Built-in preset: hide short-lived internal helper ("probe"/"worker") sessions.
+    @Published var hideProbeWorkers: Bool {
+        didSet { d.set(hideProbeWorkers, forKey: Key.hideProbeWorkers) }
     }
 
     // MARK: Behavior
@@ -115,6 +141,12 @@ final class AppSettings: ObservableObject {
         static let soundEnabled = "soundEnabled"
         static let soundVolume = "soundVolume"
         static let notificationsEnabled = "notificationsEnabled"
+        static let quietScenesEnabled = "quietScenesEnabled"
+        static let quietDuringFocus = "quietDuringFocus"
+        static let quietWhenLocked = "quietWhenLocked"
+        static let quietWhenScreenSharing = "quietWhenScreenSharing"
+        static let sessionFilters = "sessionFilters"
+        static let hideProbeWorkers = "hideProbeWorkers"
         static let expandOnHover = "expandOnHover"
         static let hideInFullscreen = "hideInFullscreen"
         static let autoExpandOnAttention = "autoExpandOnAttention"
@@ -137,6 +169,11 @@ final class AppSettings: ObservableObject {
             Key.soundEnabled: true,
             Key.soundVolume: 0.6,
             Key.notificationsEnabled: true,
+            Key.quietScenesEnabled: true,
+            Key.quietDuringFocus: true,
+            Key.quietWhenLocked: true,
+            Key.quietWhenScreenSharing: true,
+            Key.hideProbeWorkers: true,
             Key.expandOnHover: true,
             Key.hideInFullscreen: true,
             Key.autoExpandOnAttention: true,
@@ -155,6 +192,12 @@ final class AppSettings: ObservableObject {
         soundEnabled = d.bool(forKey: Key.soundEnabled)
         soundVolume = d.double(forKey: Key.soundVolume)
         notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
+        quietScenesEnabled = d.bool(forKey: Key.quietScenesEnabled)
+        quietDuringFocus = d.bool(forKey: Key.quietDuringFocus)
+        quietWhenLocked = d.bool(forKey: Key.quietWhenLocked)
+        quietWhenScreenSharing = d.bool(forKey: Key.quietWhenScreenSharing)
+        hideProbeWorkers = d.bool(forKey: Key.hideProbeWorkers)
+        sessionFilters = AppSettings.loadFilters(from: d)
         expandOnHover = d.bool(forKey: Key.expandOnHover)
         hideInFullscreen = d.bool(forKey: Key.hideInFullscreen)
         autoExpandOnAttention = d.bool(forKey: Key.autoExpandOnAttention)
@@ -179,11 +222,12 @@ final class AppSettings: ObservableObject {
         }
         displayMode = DisplayMode(rawValue: d.string(forKey: Key.displayMode) ?? "") ?? .notch
 
-        // Push initial sound prefs into the player (didSet doesn't fire during init).
-        SoundPlayer.shared.enabled = soundEnabled
+        // Push initial prefs into the runtime pieces (didSet doesn't fire during init).
         SoundPlayer.shared.volume = soundVolume
-        // Same for the notifier's enabled flag.
-        Notifier.shared.enabled = notificationsEnabled
+        // Seed the quiet-scenes config, then fold it into the sound/notifier gates. Safe
+        // during init: QuietScenes.onChange is still nil, so `configure` won't re-enter here.
+        pushQuietConfig()
+        applyMuting()
     }
 
     private func postGeometryChange() {
@@ -192,6 +236,49 @@ final class AppSettings: ObservableObject {
 
     private func postFullscreenChange() {
         NotificationCenter.default.post(name: .agentIsleFullscreenPreferenceChanged, object: nil)
+    }
+
+    // MARK: - Muting (sound + notifications)
+
+    /// Single source of truth for the `SoundPlayer`/`Notifier` `enabled` gates: the user's
+    /// preference AND-ed with "no quiet scene is active". Called on every preference change
+    /// and by `QuietScenes` (via `onChange`) whenever a scene starts or ends.
+    func applyMuting() {
+        let quiet = QuietScenes.shared.isSuppressing
+        SoundPlayer.shared.enabled = soundEnabled && !quiet
+        Notifier.shared.enabled = notificationsEnabled && !quiet
+    }
+
+    /// Mirror the user's quiet-scene preferences into the observer, then re-apply muting.
+    private func pushQuietConfig() {
+        QuietScenes.shared.configure(masterEnabled: quietScenesEnabled,
+                                     honorFocus: quietDuringFocus,
+                                     honorLock: quietWhenLocked,
+                                     honorScreenSharing: quietWhenScreenSharing)
+        applyMuting()
+    }
+
+    // MARK: - Session filters
+
+    /// True when `session` should be hidden from the island: it matches an enabled user
+    /// rule, or the probe/worker preset is on and flags it.
+    func isHidden(_ session: AgentSession) -> Bool {
+        if hideProbeWorkers, ProbeWorkerHeuristic.isProbeWorker(session) { return true }
+        return sessionFilters.contains { $0.matches(session) }
+    }
+
+    private func persistFilters() {
+        if let data = try? JSONEncoder().encode(sessionFilters) {
+            d.set(data, forKey: Key.sessionFilters)
+        }
+    }
+
+    private static func loadFilters(from d: UserDefaults) -> [SessionFilter] {
+        guard let data = d.data(forKey: Key.sessionFilters),
+              let filters = try? JSONDecoder().decode([SessionFilter].self, from: data) else {
+            return []
+        }
+        return filters
     }
 }
 

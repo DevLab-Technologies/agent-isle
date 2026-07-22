@@ -51,6 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Notifier.shared.store = store
         Notifier.shared.requestAuthorization()
 
+        // Quiet scenes: mute sound + notifications during Focus / screen-lock / screen-
+        // sharing while the island keeps updating. The observer only tracks scene state and
+        // calls back into AppSettings, which folds it into the sound/notifier enabled gates.
+        QuietScenes.shared.onChange = { AppSettings.shared.applyMuting() }
+        QuietScenes.shared.start()
+
         // Settings window: opened from the gear menu; notch tuning rebuilds the island.
         NotificationCenter.default.addObserver(
             forName: .openAgentIsleSettings, object: nil, queue: .main) { [weak self] _ in

@@ -16,7 +16,7 @@ struct MenuBarPanel: View {
             // Re-run the panel's spring layout when the session set or open chat changes,
             // matching the notch island's animation feel.
             .animation(.spring(response: 0.42, dampingFraction: 0.82),
-                       value: store.orderedSessions.map(\.id))
+                       value: store.visibleSessions.map(\.id))
             .animation(.spring(response: 0.42, dampingFraction: 0.82),
                        value: store.openedSessionID)
     }
