@@ -22,8 +22,14 @@ final class SoundPlayer {
     private let player = AVAudioPlayerNode()
     private let sampleRate: Double = 44_100
     private var started = false
-    /// Retains one file player per event so a cue isn't cut off by ARC mid-playback.
-    private var filePlayers: [Event: AVAudioPlayer] = [:]
+    /// The single custom-file cue currently sounding, retained so ARC can't cut it off
+    /// mid-playback. Holding one (not one per event) guarantees cues never overlap.
+    private var currentFile: AVAudioPlayer?
+    /// Events can arrive in bursts — several sessions surfacing in one scan tick, an
+    /// event flood, or a retriggered hook. Cues landing within this window of the last
+    /// are dropped so a burst plays a single alert instead of a garbled pile-up.
+    private let coalesceWindow: TimeInterval = 0.15
+    private var lastPlayedAt: Date?
 
     enum Event: String, CaseIterable {
         case attention   // needs a decision
@@ -66,10 +72,22 @@ final class SoundPlayer {
 
     func play(_ event: Event) {
         guard enabled else { return }
+        let now = Date()
+        if let last = lastPlayedAt, now.timeIntervalSince(last) < coalesceWindow { return }
+        lastPlayedAt = now
+
+        // A new cue always replaces whatever is still sounding, so cues never overlap or
+        // stack into a jumble. Silence any custom-file cue up front; the synth node is
+        // flushed below via `.interrupts` (or by `playFile` when a file takes over).
+        currentFile?.stop()
+        currentFile = nil
+
         if let url = pack.playableURL(for: event), playFile(url, for: event) { return }
         ensureRunning()
         let buffer = makeBuffer(for: event.notes)
-        player.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
+        // `.interrupts` flushes any still-queued/playing synth buffer so back-to-back
+        // events replace, rather than append to, the cue already sounding.
+        player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
         if !player.isPlaying { player.play() }
     }
 
@@ -80,7 +98,8 @@ final class SoundPlayer {
             let audio = try AVAudioPlayer(contentsOf: url)
             audio.volume = Float(max(0, min(1, volume)))
             guard audio.prepareToPlay(), audio.play() else { return false }
-            filePlayers[event] = audio   // retain until the next cue for this event
+            if player.isPlaying { player.stop() }   // silence any synth cue underneath
+            currentFile = audio                      // single retained player; no overlap
             return true
         } catch {
             NSLog("SoundPlayer: custom sound failed for \(event.key): \(error)")
