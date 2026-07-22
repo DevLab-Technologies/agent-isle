@@ -43,7 +43,14 @@ struct IslandRootView: View {
         .contentShape(Rectangle())   // whole bounds hoverable, incl. the notch gap
         .onTapGesture {
             withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) {
-                store.isExpanded.toggle()
+                // Toggle based on what's actually on screen, not just `isExpanded`:
+                // when the panel is open via hover-latch or a pinned chat, a tap should
+                // force it shut rather than silently flip a flag that changes nothing.
+                if expanded {
+                    store.forceCollapse()
+                } else {
+                    store.isExpanded = true
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
