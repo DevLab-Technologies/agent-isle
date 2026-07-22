@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import AppKit
 
 /// A minimal localhost HTTP server that real agents push events to.
 ///
@@ -143,6 +144,7 @@ final class EventServer {
                                                  tool: request.toolName,
                                                  command: request.command)
             }
+            maybeAutoExpand(sessionID)
             park(conn, sessionID: sessionID)
 
         case "question":
@@ -160,6 +162,7 @@ final class EventServer {
             if let session = store.sessions.first(where: { $0.id == sessionID }) {
                 Notifier.shared.notifyQuestion(session: session, summary: q.summary)
             }
+            maybeAutoExpand(sessionID)
             park(conn, sessionID: sessionID)
 
         case "done":
@@ -181,6 +184,19 @@ final class EventServer {
 
         default:
             respond(on: conn, json: #"{"ok":true}"#)
+        }
+    }
+
+    /// Surface a new permission/question by expanding the island — unless smart suppression
+    /// decides the user is already looking at that session's terminal (see
+    /// `SessionStore.shouldAutoExpand`).
+    private func maybeAutoExpand(_ sessionID: UUID) {
+        guard let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if store.shouldAutoExpand(for: session,
+                                  smartSuppression: AppSettings.shared.smartSuppression,
+                                  frontmostBundleID: frontmost) {
+            store.isExpanded = true
         }
     }
 

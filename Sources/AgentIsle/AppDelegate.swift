@@ -15,6 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var autoUpdateMenuItem: NSMenuItem?
     private var switcherHotKey: GlobalHotKey?
     private var switcherPanel: SwitcherPanel?
+    private var fullscreenMonitor: FullscreenMonitor?
+    /// True while we've raised the activation policy to `.regular` for the Settings window,
+    /// so we know to lower it back to `.accessory` once that window closes.
+    private var regularForSettings = false
 
     /// The menu-bar session panel (menu-bar / both modes). Built lazily on first open.
     private var panelPopover: NSPopover?
@@ -61,6 +65,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             forName: .agentIsleDisplayModeChanged, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.applyDisplayMode() }
             }
+        // Re-evaluate notch visibility when the "Hide in Fullscreen" preference changes.
+        NotificationCenter.default.addObserver(
+            forName: .agentIsleFullscreenPreferenceChanged, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.applyDisplayMode() }
+            }
+        // Track fullscreen so the notch island hides while it's occluded (respecting the
+        // display mode and the "Hide in Fullscreen" preference).
+        let monitor = FullscreenMonitor()
+        monitor.onChange = { [weak self] in self?.applyDisplayMode() }
+        monitor.start()
+        fullscreenMonitor = monitor
 
         // Discover real sessions (local Claude Code + Grok/Copilot). No demo data by
         // default — a fresh install should never show fake sessions. Demo is opt-in
@@ -216,6 +231,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             win.setContentSize(NSSize(width: 820, height: 620))
             win.isReleasedWhenClosed = false
             win.center()
+            // Restore the accessory activation policy once Settings closes (see
+            // `raiseActivationPolicyForSettings`).
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.settingsWindowWillClose() }
+                }
             // In capture mode, anchor top-left so the center notch panel doesn't overlap.
             if ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] == "1", let scr = NSScreen.main {
                 win.setFrameTopLeftPoint(NSPoint(x: scr.frame.minX + 40, y: scr.frame.maxY - 40))
@@ -223,8 +244,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             settingsWindow = win
         }
+        // In capture mode the app stays an accessory (the screenshot wants no Dock icon
+        // or app menu); otherwise raise to `.regular` so Settings behaves like a normal
+        // window — ⌘Tab presence, an app menu, and Dock icon while it's open.
+        if ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] != "1" {
+            raiseActivationPolicyForSettings()
+        }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Raise the app to `.regular` for the Settings window. Guarded so repeated opens don't
+    /// flip the policy more than once.
+    private func raiseActivationPolicyForSettings() {
+        guard !regularForSettings else { return }
+        regularForSettings = true
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+    }
+
+    /// Settings is closing: drop back to `.accessory` so the app disappears from ⌘Tab and
+    /// the Dock again — unless another standard window is still open that needs the regular
+    /// policy (guarding against yanking the Dock icon out from under a visible window).
+    private func settingsWindowWillClose() {
+        guard regularForSettings else { return }
+        regularForSettings = false
+        guard !hasOtherRegularWindow() else { return }
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// Whether any standard (titled) window other than the Settings window is currently
+    /// visible. The notch panel and switcher are borderless/non-activating and don't count.
+    private func hasOtherRegularWindow() -> Bool {
+        NSApp.windows.contains { win in
+            win !== settingsWindow && win.isVisible && win.styleMask.contains(.titled)
+        }
     }
 
     /// Terminate other running copies of Agent Isle so only one owns the event port.
@@ -387,10 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyDisplayMode() {
         let mode = AppSettings.shared.displayMode
 
-        // Notch/pill window visibility. Launch overrides win: demo capture forces it on,
-        // settings capture suppresses it.
-        let showNotch = (mode.showsNotch || forceNotchWindow) && !suppressNotchWindow
-        if showNotch {
+        // Notch/pill window visibility.
+        if notchWindowShouldShow {
             notchWindow?.orderFrontRegardless()
         } else {
             notchWindow?.orderOut(nil)
@@ -405,6 +458,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if panelPopover?.isShown == true { panelPopover?.performClose(nil) }
             item.menu = fullMenu
         }
+    }
+
+    /// Whether the notch/pill window should currently be visible. Launch overrides win:
+    /// demo/marketing capture forces it on, settings capture suppresses it. Otherwise the
+    /// display mode decides, and — when enabled — a fullscreen frontmost window hides it
+    /// (the notch is occluded there anyway).
+    private var notchWindowShouldShow: Bool {
+        if suppressNotchWindow { return false }
+        if forceNotchWindow { return true }
+        guard AppSettings.shared.displayMode.showsNotch else { return false }
+        if AppSettings.shared.hideInFullscreen && FullscreenMonitor.isFrontmostWindowFullscreen() {
+            return false
+        }
+        return true
     }
 
     /// Left-click opens the session panel; right-click shows the minimal safety menu.
