@@ -109,6 +109,24 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    // MARK: - Attention auto-expand
+
+    /// Whether a new attention event (permission/question) for `session` should auto-expand
+    /// the island. With smart suppression on, the expand is skipped when the session's own
+    /// terminal is already frontmost — the user is looking at that session, so popping the
+    /// panel open would just get in the way (the sound cue and banner still fire).
+    ///
+    /// `frontmostBundleID` is injected so the decision is unit-testable without the live
+    /// workspace; the caller passes `NSWorkspace.shared.frontmostApplication?.bundleIdentifier`.
+    func shouldAutoExpand(for session: AgentSession,
+                          smartSuppression: Bool,
+                          frontmostBundleID: String?) -> Bool {
+        guard smartSuppression else { return true }
+        guard let terminal = session.terminalBundleID, let frontmost = frontmostBundleID
+        else { return true }   // unknown host → can't suppress, so surface it
+        return terminal != frontmost
+    }
+
     // MARK: - Mutation
 
     func upsert(_ session: AgentSession) {

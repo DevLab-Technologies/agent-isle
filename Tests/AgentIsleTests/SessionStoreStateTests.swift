@@ -92,4 +92,40 @@ final class SessionStoreStateTests: XCTestCase {
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertFalse(store.wasTranscriptQuestionAnswered(id, q))
     }
+
+    // MARK: - Smart suppression (auto-expand gating)
+
+    private func session(bundle: String?) -> AgentSession {
+        AgentSession(agent: .claude, title: "t", terminal: "iTerm",
+                     lastMessage: "", status: .waiting, terminalBundleID: bundle)
+    }
+
+    func testSuppressesAutoExpandWhenSessionTerminalIsFrontmost() {
+        let store = SessionStore()
+        let s = session(bundle: "com.googlecode.iterm2")
+        XCTAssertFalse(store.shouldAutoExpand(for: s, smartSuppression: true,
+                                              frontmostBundleID: "com.googlecode.iterm2"))
+    }
+
+    func testExpandsWhenADifferentAppIsFrontmost() {
+        let store = SessionStore()
+        let s = session(bundle: "com.googlecode.iterm2")
+        XCTAssertTrue(store.shouldAutoExpand(for: s, smartSuppression: true,
+                                             frontmostBundleID: "com.apple.Safari"))
+    }
+
+    func testExpandsWhenSuppressionDisabledEvenIfFrontmost() {
+        let store = SessionStore()
+        let s = session(bundle: "com.googlecode.iterm2")
+        XCTAssertTrue(store.shouldAutoExpand(for: s, smartSuppression: false,
+                                             frontmostBundleID: "com.googlecode.iterm2"))
+    }
+
+    func testExpandsWhenHostBundleUnknown() {
+        let store = SessionStore()
+        // No terminal bundle id recorded → can't prove the user is looking at it, so surface.
+        let s = session(bundle: nil)
+        XCTAssertTrue(store.shouldAutoExpand(for: s, smartSuppression: true,
+                                             frontmostBundleID: "com.googlecode.iterm2"))
+    }
 }

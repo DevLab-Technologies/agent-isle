@@ -156,6 +156,24 @@ struct DisplaySettings: View {
                 }
             }
 
+            SettingsGroup(title: "Behavior",
+                          footnote: "Fullscreen hiding affects only the notch island. Smart suppression still plays the sound cue and posts the notification — it only skips popping the panel open.") {
+                SettingsRow(title: "Hide in Fullscreen",
+                            subtitle: "Hide the notch island while a fullscreen window is frontmost.") {
+                    Toggle("", isOn: $settings.hideInFullscreen).labelsHidden().toggleStyle(.switch)
+                }
+                SettingsRow(title: "Auto-expand on Attention",
+                            subtitle: "Open the panel automatically when a session needs a permission or asks a question.") {
+                    Toggle("", isOn: $settings.autoExpandOnAttention).labelsHidden().toggleStyle(.switch)
+                }
+                SettingsRow(title: "Smart Suppression",
+                            subtitle: "When auto-expand is on, skip it for a session whose terminal is already frontmost.",
+                            showsDivider: false) {
+                    Toggle("", isOn: $settings.smartSuppression).labelsHidden().toggleStyle(.switch)
+                        .disabled(!settings.autoExpandOnAttention)
+                }
+            }
+
             SettingsGroup(title: "Session Card") {
                 SettingsRow(title: "Show Task List",
                             subtitle: "Render the agent's todo list with progress.") {

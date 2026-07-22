@@ -58,6 +58,29 @@ final class AppSettings: ObservableObject {
     // MARK: Behavior
     @Published var expandOnHover: Bool { didSet { d.set(expandOnHover, forKey: Key.expandOnHover) } }
 
+    /// Hide the notch island while a frontmost window is in fullscreen (the notch is
+    /// occluded there anyway). Only affects the notch surface; the menu-bar panel is
+    /// unaffected. Re-evaluated by the app whenever the active space or fullscreen
+    /// state changes.
+    @Published var hideInFullscreen: Bool {
+        didSet { d.set(hideInFullscreen, forKey: Key.hideInFullscreen); postFullscreenChange() }
+    }
+
+    /// Auto-expand the island when a session needs attention (permission/question). When
+    /// off, attention still plays the sound cue and posts the banner, but the panel never
+    /// pops open on its own. Master switch for the auto-expand behavior.
+    @Published var autoExpandOnAttention: Bool {
+        didSet { d.set(autoExpandOnAttention, forKey: Key.autoExpandOnAttention) }
+    }
+
+    /// Skip auto-expanding the island for a new attention event when the session's own
+    /// terminal is already frontmost — the user is looking at that session, so popping the
+    /// panel open would just get in the way. The sound cue and banner still fire.
+    /// Only consulted when `autoExpandOnAttention` is on.
+    @Published var smartSuppression: Bool {
+        didSet { d.set(smartSuppression, forKey: Key.smartSuppression) }
+    }
+
     // MARK: Session card
     @Published var showTokens: Bool { didSet { d.set(showTokens, forKey: Key.showTokens) } }
     @Published var showTerminal: Bool { didSet { d.set(showTerminal, forKey: Key.showTerminal) } }
@@ -90,6 +113,9 @@ final class AppSettings: ObservableObject {
         static let soundVolume = "soundVolume"
         static let notificationsEnabled = "notificationsEnabled"
         static let expandOnHover = "expandOnHover"
+        static let hideInFullscreen = "hideInFullscreen"
+        static let autoExpandOnAttention = "autoExpandOnAttention"
+        static let smartSuppression = "smartSuppression"
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
         static let showTasks = "showTasks"
@@ -108,6 +134,9 @@ final class AppSettings: ObservableObject {
             Key.soundVolume: 0.6,
             Key.notificationsEnabled: true,
             Key.expandOnHover: true,
+            Key.hideInFullscreen: true,
+            Key.autoExpandOnAttention: true,
+            Key.smartSuppression: true,
             Key.showTokens: true,
             Key.showTerminal: true,
             Key.showTasks: true,
@@ -122,6 +151,9 @@ final class AppSettings: ObservableObject {
         soundVolume = d.double(forKey: Key.soundVolume)
         notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
         expandOnHover = d.bool(forKey: Key.expandOnHover)
+        hideInFullscreen = d.bool(forKey: Key.hideInFullscreen)
+        autoExpandOnAttention = d.bool(forKey: Key.autoExpandOnAttention)
+        smartSuppression = d.bool(forKey: Key.smartSuppression)
         showTokens = d.bool(forKey: Key.showTokens)
         showTerminal = d.bool(forKey: Key.showTerminal)
         showTasks = d.bool(forKey: Key.showTasks)
@@ -151,6 +183,10 @@ final class AppSettings: ObservableObject {
     private func postGeometryChange() {
         NotificationCenter.default.post(name: .agentIsleGeometryChanged, object: nil)
     }
+
+    private func postFullscreenChange() {
+        NotificationCenter.default.post(name: .agentIsleFullscreenPreferenceChanged, object: nil)
+    }
 }
 
 extension Notification.Name {
@@ -161,6 +197,9 @@ extension Notification.Name {
     /// Posted when the user picks a different display mode; the app reconfigures its
     /// surfaces (notch window visibility + menu-bar status item behavior).
     static let agentIsleDisplayModeChanged = Notification.Name("AgentIsleDisplayModeChanged")
+    /// Posted when the user toggles "Hide in Fullscreen"; the app re-evaluates whether the
+    /// notch window should currently be visible.
+    static let agentIsleFullscreenPreferenceChanged = Notification.Name("AgentIsleFullscreenPreferenceChanged")
 }
 
 /// Thin wrapper over `SMAppService` for the "Launch at Login" toggle. In a packaged
