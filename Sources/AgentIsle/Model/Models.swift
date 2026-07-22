@@ -94,6 +94,7 @@ enum SessionStatus: String, Codable {
     case working        // actively producing output
     case waiting        // needs a permission decision
     case asking         // asking the user a question
+    case planning       // presented a plan awaiting review
     case done           // finished, waiting to be acknowledged
     case idle           // connected but quiet
 
@@ -102,6 +103,7 @@ enum SessionStatus: String, Codable {
         case .working: return "Working"
         case .waiting: return "Permission"
         case .asking: return "Question"
+        case .planning: return "Plan"
         case .done: return "Done"
         case .idle: return "Idle"
         }
@@ -112,6 +114,7 @@ enum SessionStatus: String, Codable {
         case .working: return Color(red: 0.42, green: 0.60, blue: 0.98)
         case .waiting: return Color(red: 0.98, green: 0.72, blue: 0.30)
         case .asking: return Color(red: 0.70, green: 0.55, blue: 0.98)
+        case .planning: return Color(red: 0.36, green: 0.78, blue: 0.82) // teal — plan review
         case .done: return Color(red: 0.36, green: 0.83, blue: 0.55)
         case .idle: return Color(white: 0.5)
         }
@@ -122,9 +125,10 @@ enum SessionStatus: String, Codable {
         switch self {
         case .waiting: return 0
         case .asking: return 1
-        case .working: return 2
-        case .done: return 3
-        case .idle: return 4
+        case .planning: return 2
+        case .working: return 3
+        case .done: return 4
+        case .idle: return 5
         }
     }
 }
@@ -219,6 +223,49 @@ struct AgentQuestion: Equatable, Hashable {
     var summary: String {
         guard let first = parts.first else { return "Question" }
         return parts.count > 1 ? "\(parts.count) questions" : first.prompt
+    }
+}
+
+/// A plan an agent presented for review (e.g. Claude Code's `ExitPlanMode`). The
+/// markdown body is rendered as formatted text in the card; the user can approve it or
+/// reply with feedback, both delivered back the same way an answered question is.
+struct AgentPlan: Equatable, Hashable {
+    /// How the plan reached us — which decides how approval/feedback is delivered back,
+    /// mirroring `AgentQuestion.Source`.
+    enum Source: Equatable, Hashable {
+        case hook        // pushed by the PreToolUse hook; reply on its parked connection
+        case transcript  // discovered by polling the JSONL; reply is typed into the host app
+    }
+
+    var markdown: String
+    var source: Source
+
+    init(markdown: String, source: Source = .hook) {
+        self.markdown = markdown
+        self.source = source
+    }
+
+    /// Short one-line summary for compact surfaces (collapsed island / lastMessage /
+    /// notification). Takes the first heading or non-empty line, stripped of markdown marks.
+    var summary: String {
+        for raw in markdown.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            let cleaned = line.drMarked
+            if !cleaned.isEmpty { return cleaned }
+        }
+        return "Plan ready for review"
+    }
+}
+
+private extension String {
+    /// Strip common leading markdown marks (heading #, list bullets, blockquote) and inline
+    /// emphasis/backtick characters so a line reads cleanly in a compact one-line surface.
+    var drMarked: String {
+        var s = self
+        while let first = s.first, "#>-*+ ".contains(first) { s.removeFirst() }
+        s.removeAll { $0 == "*" || $0 == "`" || $0 == "_" }
+        return s.trimmingCharacters(in: .whitespaces)
     }
 }
 
@@ -325,6 +372,7 @@ struct AgentSession: Identifiable, Equatable {
     var updatedAt: Date
     var permission: PermissionRequest?
     var question: AgentQuestion?
+    var plan: AgentPlan?        // a plan awaiting the user's review (nil when none)
     var tasks: TaskList         // the agent's current todo list (empty when none)
     var tokens: Int             // total tokens used this session (0 if unknown)
     var model: String?          // display name of the current model, e.g. "Opus 4.8" (nil if unknown)
@@ -343,6 +391,7 @@ struct AgentSession: Identifiable, Equatable {
          updatedAt: Date = Date(),
          permission: PermissionRequest? = nil,
          question: AgentQuestion? = nil,
+         plan: AgentPlan? = nil,
          tasks: TaskList = TaskList(items: []),
          tokens: Int = 0,
          model: String? = nil,
@@ -363,6 +412,7 @@ struct AgentSession: Identifiable, Equatable {
         self.updatedAt = updatedAt
         self.permission = permission
         self.question = question
+        self.plan = plan
         self.tasks = tasks
         self.tokens = tokens
         self.model = model

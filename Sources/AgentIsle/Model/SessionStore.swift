@@ -92,7 +92,7 @@ final class SessionStore: ObservableObject {
     }
 
     var attentionCount: Int {
-        visibleSessions.filter { $0.status == .waiting || $0.status == .asking }.count
+        visibleSessions.filter { $0.status == .waiting || $0.status == .asking || $0.status == .planning }.count
     }
 
     var workingCount: Int {
@@ -307,6 +307,58 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    // MARK: - Plan review
+
+    /// Approve the plan the agent presented — let it proceed as written.
+    func approvePlan(sessionID: UUID) {
+        resolvePlan(sessionID: sessionID, feedback: nil)
+    }
+
+    /// Send the user's feedback on the plan back to the agent so it can revise.
+    /// Empty feedback is treated as an approval so a stray submit still resolves cleanly.
+    func sendPlanFeedback(sessionID: UUID, feedback: String) {
+        resolvePlan(sessionID: sessionID, feedback: feedback)
+    }
+
+    /// Resolve a plan card: approve (nil/empty feedback) or send feedback for a revision.
+    ///
+    /// Delivery mirrors `answerQuestion`. A hook-pushed plan has a parked connection, so the
+    /// decision replies straight to the blocked hook ("approve" for an approval, otherwise the
+    /// feedback text). A transcript-detected plan has no such channel, so the reply is typed
+    /// into the session's host app — best-effort, the same transport as in-notch chat.
+    private func resolvePlan(sessionID: UUID, feedback: String?) {
+        let session = sessions.first { $0.id == sessionID }
+        guard session?.plan != nil else { return }
+        let viaTranscript = session?.plan?.source == .transcript
+        let trimmed = (feedback ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasFeedback = !trimmed.isEmpty
+        let oneLine = trimmed.replacingOccurrences(of: "\n", with: "; ")
+
+        update(id: sessionID) { s in
+            s.plan = nil
+            s.status = .working
+            s.lastMessage = hasFeedback
+                ? (viaTranscript ? "Sent plan feedback to \(s.terminal)" : "Plan feedback: \(oneLine)")
+                : "Plan approved"
+        }
+        SoundPlayer.shared.play(hasFeedback ? .select : .approve)
+
+        if viaTranscript, let session {
+            sendError = nil
+            let text = hasFeedback ? oneLine : "Approved — proceed with the plan."
+            MessageSender.send(text, to: session) { [weak self] result in
+                if case .failure(let error) = result {
+                    self?.sendError = error.userMessage
+                    SoundPlayer.shared.play(.deny)
+                }
+            }
+        } else {
+            // "approve" is the sentinel the hook maps to allow; anything else is feedback
+            // that denies ExitPlanMode with the text as the reason so the agent revises.
+            EventServer.shared?.reply(sessionID: sessionID, decision: hasFeedback ? oneLine : "approve")
+        }
+    }
+
     /// Record that the user answered a transcript-detected question, with the time it
     /// happened. Extracted so the poller-suppression logic is unit-testable without
     /// driving the real message transport.
@@ -363,8 +415,9 @@ final class SessionStore: ObservableObject {
         demoStep += 1
         guard let claude = sessions.first(where: { $0.agent == .claude }) else { return }
 
-        // Cycle Claude through a realistic loop: working -> permission -> approved -> done.
-        switch demoStep % 5 {
+        // Cycle Claude through a realistic loop: working -> permission -> question ->
+        // plan review -> done.
+        switch demoStep % 6 {
         case 1:
             update(id: claude.id) { s in
                 s.status = .working
@@ -404,9 +457,18 @@ final class SessionStore: ObservableObject {
                                            options: ["Production", "Staging", "Local only"])
             }
             SoundPlayer.shared.play(.attention)
+        case 5:
+            update(id: claude.id) { s in
+                s.question = nil
+                s.status = .planning
+                s.lastMessage = "Shared a plan for review"
+                s.plan = AgentPlan(markdown: SessionStore.demoPlanMarkdown)
+            }
+            SoundPlayer.shared.play(.attention)
         default:
             update(id: claude.id) { s in
                 s.question = nil
+                s.plan = nil
                 s.status = .done
                 s.lastMessage = "Done — click to jump"
                 advanceTasks(&s.tasks)   // complete the active task, start the next
@@ -433,6 +495,28 @@ final class SessionStore: ObservableObject {
             tasks.items[next].state = .inProgress
         }
     }
+
+    /// A representative plan (headings, lists, inline code, emphasis) so Demo Mode
+    /// exercises the Markdown rendering in `PlanReviewCard`.
+    static let demoPlanMarkdown = """
+    ## Refactor the auth middleware
+
+    Split the monolithic `verify()` into focused steps and add explicit error handling.
+
+    ### Changes
+    1. Extract `parseToken()` from `middleware.ts`
+    2. Add an `AuthError` type with a *typed* reason
+    3. Guard against a missing or expired token **before** calling `jwt.verify`
+
+    ### Follow-ups
+    - Cover the new paths with unit tests
+    - Update the `/auth` docs
+
+    ```ts
+    if (!token) throw new AuthError('missing');
+    return jwt.verify(token, secret);
+    ```
+    """
 
     static func demoSessions() -> [AgentSession] {
         let now = Date()

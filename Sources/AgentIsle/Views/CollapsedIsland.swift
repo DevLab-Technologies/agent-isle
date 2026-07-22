@@ -20,10 +20,12 @@ struct CollapsedIsland: View {
     private let earWidth: CGFloat = 176
 
     /// Color of the "needs you" signal — amber for a pending permission, purple for a
-    /// question, matching the per-status colors used everywhere else.
+    /// question, teal for a plan review, matching the per-status colors used elsewhere.
+    /// Ordered by urgency so the most blocking state wins when several are pending.
     private var attentionColor: Color {
-        store.visibleSessions.contains { $0.status == .waiting }
-            ? SessionStatus.waiting.color : SessionStatus.asking.color
+        if store.visibleSessions.contains(where: { $0.status == .waiting }) { return SessionStatus.waiting.color }
+        if store.visibleSessions.contains(where: { $0.status == .asking }) { return SessionStatus.asking.color }
+        return SessionStatus.planning.color
     }
 
     var body: some View {

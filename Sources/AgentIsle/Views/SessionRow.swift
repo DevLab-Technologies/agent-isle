@@ -25,6 +25,11 @@ struct SessionRow: View {
                 QuestionCard(session: session, question: question)
                     .id(question)
             }
+            if let plan = session.plan {
+                // Key by the plan so a superseding plan clears any typed feedback.
+                PlanReviewCard(session: session, plan: plan)
+                    .id(plan)
+            }
         }
         .padding(Theme.Space.lg)
         .background(
@@ -38,7 +43,7 @@ struct SessionRow: View {
     }
 
     private var needsAttention: Bool {
-        session.status == .waiting || session.status == .asking
+        session.status == .waiting || session.status == .asking || session.status == .planning
     }
 
     private var borderColor: Color {

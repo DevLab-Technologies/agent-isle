@@ -165,12 +165,30 @@ final class EventServer {
             maybeAutoExpand(sessionID)
             park(conn, sessionID: sessionID)
 
+        case "plan":
+            let plan = AgentPlan(markdown: event.plan ?? event.message ?? "Plan ready for review")
+            if store.sessions.contains(where: { $0.id == sessionID }) {
+                store.update(id: sessionID) { s in
+                    s.status = .planning
+                    s.plan = plan
+                    if let m = event.message { s.lastMessage = m }
+                }
+            } else {
+                store.upsert(sessionFor(id: sessionID, agent: agent, event: event,
+                                        status: .planning, plan: plan))
+            }
+            SoundPlayer.shared.play(.attention)
+            if let session = store.sessions.first(where: { $0.id == sessionID }) {
+                Notifier.shared.notifyPlan(session: session, summary: plan.summary)
+            }
+            park(conn, sessionID: sessionID)
+
         case "done":
             // The session ended: any prompt it was blocked on is moot. Unpark the old
             // hook, then drop the card so a finished session never keeps "asking".
             unpark(sessionID)
             upsertSession(id: sessionID, agent: agent, event: event, status: .done)
-            store.update(id: sessionID) { $0.permission = nil; $0.question = nil }
+            store.update(id: sessionID) { $0.permission = nil; $0.question = nil; $0.plan = nil }
             SoundPlayer.shared.play(.done)
             if let session = store.sessions.first(where: { $0.id == sessionID }) {
                 Notifier.shared.notifyDone(session: session, title: session.title)
@@ -220,7 +238,8 @@ final class EventServer {
     private func sessionFor(id: UUID, agent: AgentKind, event: AgentEvent,
                             status: SessionStatus,
                             permission: PermissionRequest? = nil,
-                            question: AgentQuestion? = nil) -> AgentSession {
+                            question: AgentQuestion? = nil,
+                            plan: AgentPlan? = nil) -> AgentSession {
         AgentSession(id: id,
                      agent: agent,
                      title: event.title ?? "session",
@@ -229,6 +248,7 @@ final class EventServer {
                      status: status,
                      permission: permission,
                      question: question,
+                     plan: plan,
                      model: ModelName.pretty(event.model),
                      terminalBundleID: event.term_bundle)
     }
@@ -307,9 +327,10 @@ final class EventServer {
         // being non-nil regardless of status, so clearing must not depend on the status
         // still being .waiting/.asking (a stray status event may have moved it on).
         store.update(id: sessionID) { s in
-            let wasPending = s.status == .waiting || s.status == .asking
+            let wasPending = s.status == .waiting || s.status == .asking || s.status == .planning
             if s.permission != nil { s.permission = nil; s.lastMessage = "Permission expired" }
             if s.question != nil   { s.question = nil;   s.lastMessage = "Question expired" }
+            if s.plan != nil       { s.plan = nil;       s.lastMessage = "Plan review expired" }
             if wasPending { s.status = .idle }
         }
     }
@@ -349,7 +370,7 @@ final class EventServer {
 
 /// JSON payload agents POST to `/event`.
 struct AgentEvent: Decodable {
-    var type: String                 // status | permission | question | done | remove
+    var type: String                 // status | permission | question | plan | done | remove
     var session: String?             // caller-supplied stable id (e.g. Claude session_id)
     var agent: String?               // claude | codex | gemini ...
     var title: String?
@@ -366,6 +387,9 @@ struct AgentEvent: Decodable {
     var added: Int?
     var removed: Int?
     var diff: [WireDiffLine]?
+
+    // plan field — the markdown body of a plan presented for review
+    var plan: String?
 
     // question fields — a multi-part `questions` array, or the flat single-question form
     var questions: [WireQuestion]?

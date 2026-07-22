@@ -80,6 +80,13 @@ final class Notifier: NSObject {
                 category: nil)
     }
 
+    func notifyPlan(session: AgentSession, summary: String) {
+        deliver(session: session,
+                title: "\(session.agent.displayName) shared a plan",
+                body: summary,
+                category: nil)
+    }
+
     func notifyDone(session: AgentSession, title: String) {
         deliver(session: session,
                 title: "\(session.agent.displayName) finished",
