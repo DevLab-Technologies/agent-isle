@@ -144,11 +144,14 @@ final class VoiceAnnouncer: NSObject {
 
     private func playData(_ data: Data) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            // Assign first so every early exit — a throwing `AVAudioPlayer(data:)`, a failed
+            // `play()`, or normal completion — resumes this continuation exactly once. Setting
+            // it only after the throwing init would let the catch resume nil and wedge the queue.
+            playbackContinuation = cont
             do {
                 let player = try AVAudioPlayer(data: data)
                 player.delegate = self
                 player.volume = Float(max(0, min(1, config.volume)))
-                playbackContinuation = cont
                 audioPlayer = player
                 guard player.prepareToPlay(), player.play() else {
                     finishPlayback(); return

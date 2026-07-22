@@ -130,25 +130,42 @@ struct VoiceSettings: View {
         SettingsGroup(title: "API Keys",
                       footnote: "Stored in your macOS Keychain, never in plain files or diagnostic exports. Used only for the providers you select above.") {
             if needsOpenAIKey {
-                keyRow(title: "OpenAI", key: $settings.openAIKey,
-                       showsDivider: needsElevenLabsKey || needsAnthropicKey)
+                APIKeyField(title: "OpenAI", stored: $settings.openAIKey,
+                            showsDivider: needsElevenLabsKey || needsAnthropicKey)
             }
             if needsElevenLabsKey {
-                keyRow(title: "ElevenLabs", key: $settings.elevenLabsKey,
-                       showsDivider: needsAnthropicKey)
+                APIKeyField(title: "ElevenLabs", stored: $settings.elevenLabsKey,
+                            showsDivider: needsAnthropicKey)
             }
             if needsAnthropicKey {
-                keyRow(title: "Anthropic", key: $settings.anthropicKey, showsDivider: false)
+                APIKeyField(title: "Anthropic", stored: $settings.anthropicKey, showsDivider: false)
             }
         }
     }
+}
 
-    private func keyRow(title: String, key: Binding<String>, showsDivider: Bool) -> some View {
+/// A secure API-key row. Edits are held in local state and only written back to the stored
+/// (Keychain-backed) binding on commit — pressing Return or leaving the field/section — so we
+/// don't perform synchronous Keychain I/O on every keystroke.
+private struct APIKeyField: View {
+    let title: String
+    @Binding var stored: String
+    var showsDivider: Bool
+    @State private var draft = ""
+
+    var body: some View {
         SettingsRow(title: title,
-                    subtitle: key.wrappedValue.isEmpty ? "Not set" : "Saved to Keychain",
+                    subtitle: stored.isEmpty ? "Not set" : "Saved to Keychain",
                     showsDivider: showsDivider) {
-            SecureField("sk-…", text: key)
+            SecureField("sk-…", text: $draft)
                 .textFieldStyle(.roundedBorder).frame(width: 220)
+                .onAppear { draft = stored }
+                .onSubmit(commit)
+                .onDisappear(perform: commit)
         }
+    }
+
+    private func commit() {
+        if draft != stored { stored = draft }
     }
 }

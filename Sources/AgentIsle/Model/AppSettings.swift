@@ -440,7 +440,10 @@ final class AppSettings: ObservableObject {
         let quiet = QuietScenes.shared.isSuppressing
         SoundPlayer.shared.enabled = soundEnabled && !quiet
         Notifier.shared.enabled = notificationsEnabled && !quiet
-        VoiceAnnouncer.shared.enabled = voiceEnabled && !quiet
+        let voiceOn = voiceEnabled && !quiet
+        VoiceAnnouncer.shared.enabled = voiceOn
+        // Cut any in-flight callout the moment voice is disabled or a quiet scene starts.
+        if !voiceOn { VoiceAnnouncer.shared.stop() }
     }
 
     /// Rebuild the voice config from the current preferences and hand it (plus the resolved

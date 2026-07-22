@@ -45,7 +45,9 @@ enum SpeechClient {
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": "gpt-4o-mini-tts",
+            // tts-1 is available on every account with API access; the newer gpt-4o-mini-tts
+            // requires extra access and would otherwise fail silently to the on-device voice.
+            "model": "tts-1",
             "voice": voice,
             "input": text,
             "response_format": "mp3",
@@ -55,7 +57,14 @@ enum SpeechClient {
 
     private static func elevenLabs(text: String, config: VoiceConfig, key: String) async throws -> Data {
         let voiceID = config.cloudVoice.isEmpty ? elevenLabsDefaultVoice : config.cloudVoice
-        var req = URLRequest(url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(voiceID)")!)
+        // The voice id goes into the URL path; a user-entered value may contain characters that
+        // make `URL(string:)` fail. Encode it, and throw (fall back to on-device) instead of
+        // force-unwrapping nil and crashing.
+        let encoded = voiceID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? voiceID
+        guard let url = URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(encoded)") else {
+            throw VoiceError.badResponse
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 20
         req.setValue(key, forHTTPHeaderField: "xi-api-key")
