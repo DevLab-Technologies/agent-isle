@@ -140,6 +140,13 @@ final class AppSettings: ObservableObject {
     @Published var maxPanelWidth: Double { didSet { d.set(maxPanelWidth, forKey: Key.maxPanelWidth) } }
     @Published var maxPanelHeight: Double { didSet { d.set(maxPanelHeight, forKey: Key.maxPanelHeight) } }
 
+    // MARK: Session lifecycle
+    /// How long (in minutes) a quiet session stays surfaced before `IdeWatcher` cleans it
+    /// up. Read live by the watcher's active window; range 1…60, default 8.
+    @Published var idleCleanupMinutes: Double {
+        didSet { d.set(idleCleanupMinutes, forKey: Key.idleCleanupMinutes) }
+    }
+
     /// Which surface(s) the island uses. Resolved on first run from the hardware (see
     /// `init`); changing it reconfigures the live surfaces via `.agentIsleDisplayModeChanged`.
     @Published var displayMode: DisplayMode {
@@ -175,6 +182,7 @@ final class AppSettings: ObservableObject {
         static let notchHeightAdjust = DefaultsKeys.notchHeightAdjust
         static let maxPanelWidth = "maxPanelWidth"
         static let maxPanelHeight = "maxPanelHeight"
+        static let idleCleanupMinutes = "idleCleanupMinutes"
         static let displayMode = DefaultsKeys.displayMode
     }
 
@@ -203,6 +211,7 @@ final class AppSettings: ObservableObject {
             Key.notchHeightAdjust: 0,
             Key.maxPanelWidth: 480,
             Key.maxPanelHeight: 380,
+            Key.idleCleanupMinutes: 8,
         ])
         soundEnabled = d.bool(forKey: Key.soundEnabled)
         soundVolume = d.double(forKey: Key.soundVolume)
@@ -228,6 +237,7 @@ final class AppSettings: ObservableObject {
         notchHeightAdjust = d.double(forKey: Key.notchHeightAdjust)
         maxPanelWidth = d.double(forKey: Key.maxPanelWidth)
         maxPanelHeight = d.double(forKey: Key.maxPanelHeight)
+        idleCleanupMinutes = d.double(forKey: Key.idleCleanupMinutes)
 
         // Resolve the display mode on first run from the hardware: a physical notch gets
         // the notch island, everything else (notchless laptops, external displays) starts

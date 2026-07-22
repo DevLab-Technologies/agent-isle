@@ -15,8 +15,10 @@ final class IdeWatcher {
     private var timer: Timer?
     private let projectsDir: URL
 
-    /// Surface a session whose transcript changed within this window.
-    private let activeWindow: TimeInterval = 8 * 60
+    /// Surface a session whose transcript changed within this window. Driven by the
+    /// user-configurable idle-cleanup preference (minutes), read live each scan so a change
+    /// takes effect without a restart.
+    private var activeWindow: TimeInterval { AppSettings.shared.idleCleanupMinutes * 60 }
     /// Treat a session as actively working if its transcript changed this recently.
     private let workingWindow: TimeInterval = 15
     /// A hook-free session is only reported "done" once its transcript has been quiet this
