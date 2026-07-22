@@ -17,7 +17,7 @@ struct SwitcherView: View {
     @State private var selected = 0
     @FocusState private var focused: Bool
 
-    private var sessions: [AgentSession] { store.orderedSessions }
+    private var sessions: [AgentSession] { store.visibleSessions }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

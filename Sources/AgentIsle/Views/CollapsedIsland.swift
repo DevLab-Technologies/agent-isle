@@ -22,7 +22,7 @@ struct CollapsedIsland: View {
     /// Color of the "needs you" signal — amber for a pending permission, purple for a
     /// question, matching the per-status colors used everywhere else.
     private var attentionColor: Color {
-        store.sessions.contains { $0.status == .waiting }
+        store.visibleSessions.contains { $0.status == .waiting }
             ? SessionStatus.waiting.color : SessionStatus.asking.color
     }
 
@@ -90,8 +90,8 @@ struct CollapsedIsland: View {
                 .padding(.horizontal, 5).padding(.vertical, 2)
                 .background(Capsule().fill(SessionStatus.working.color.opacity(0.14)))
             }
-            if store.sessions.count > 1 {
-                Text("\(store.sessions.count)")
+            if store.visibleSessions.count > 1 {
+                Text("\(store.visibleSessions.count)")
                     .font(Theme.Font.label(10.5, weight: .semibold))
                     .foregroundStyle(Theme.Ink.tertiary)
                     .padding(.horizontal, Theme.Space.sm).padding(.vertical, 2)

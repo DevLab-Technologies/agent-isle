@@ -82,7 +82,7 @@ struct ExpandedIsland: View {
                 if store.attentionCount > 0 {
                     CountBadge(count: store.attentionCount, color: SessionStatus.waiting.color)
                 }
-                Text("\(store.sessions.count) \(store.sessions.count == 1 ? "agent" : "agents")")
+                Text("\(store.visibleSessions.count) \(store.visibleSessions.count == 1 ? "agent" : "agents")")
                     .font(Theme.Font.label(10))
                     .foregroundStyle(Theme.Ink.tertiary)
                     .lineLimit(1)
@@ -187,15 +187,56 @@ struct ExpandedIsland: View {
             VStack(spacing: Theme.Space.md) {
                 if store.sessions.isEmpty {
                     welcomeState
+                } else if store.visibleSessions.isEmpty {
+                    allHiddenState
                 } else {
-                    ForEach(store.orderedSessions) { session in
+                    ForEach(store.visibleSessions) { session in
                         SessionRow(session: session)
                     }
+                    if store.hiddenCount > 0 { hiddenFooter }
                 }
             }
             .padding(Theme.Space.lg)
         }
         .frame(maxHeight: CGFloat(settings.maxPanelHeight))
+    }
+
+    /// Footer note so filtered-out sessions are never silently dropped.
+    private var hiddenFooter: some View {
+        Button {
+            NotificationCenter.default.post(name: .openAgentIsleSettings, object: nil)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 10))
+                Text("+\(store.hiddenCount) hidden by filters")
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+            }
+            .foregroundStyle(Theme.Ink.tertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 2)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Shown when sessions exist but filters hide every one of them.
+    private var allHiddenState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 22))
+                .foregroundStyle(.white.opacity(0.5))
+            Text("All \(store.sessions.count) \(store.sessions.count == 1 ? "session" : "sessions") hidden")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+            Button("Manage filters") {
+                NotificationCenter.default.post(name: .openAgentIsleSettings, object: nil)
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(SessionStatus.working.color)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
     }
 
     /// Shown on a fresh install when nothing is running yet.

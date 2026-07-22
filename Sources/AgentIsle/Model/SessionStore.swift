@@ -73,17 +73,30 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Sessions the user should actually see: `orderedSessions` minus anything a filter rule
+    /// (or the probe/worker preset) hides. Every surface reads this rather than `sessions`
+    /// so hidden sessions drop out of the list, the pill, and the counts alike.
+    var visibleSessions: [AgentSession] {
+        orderedSessions.filter { !AppSettings.shared.isHidden($0) }
+    }
+
+    /// How many sessions are currently filtered out — surfaced as "+N hidden" so nothing is
+    /// silently dropped.
+    var hiddenCount: Int {
+        sessions.count - visibleSessions.count
+    }
+
     /// The session the collapsed island should surface first.
     var focusSession: AgentSession? {
-        orderedSessions.first
+        visibleSessions.first
     }
 
     var attentionCount: Int {
-        sessions.filter { $0.status == .waiting || $0.status == .asking }.count
+        visibleSessions.filter { $0.status == .waiting || $0.status == .asking }.count
     }
 
     var workingCount: Int {
-        sessions.filter { $0.status == .working }.count
+        visibleSessions.filter { $0.status == .working }.count
     }
 
     /// Report whether the pointer is inside the island. Entry applies immediately;

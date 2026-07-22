@@ -27,7 +27,7 @@ struct IslandRootView: View {
             if size.width > 1, size.height > 1 { store.islandSize = size }
         }
         .animation(.spring(response: 0.42, dampingFraction: 0.78), value: expanded)
-        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.orderedSessions.map(\.id))
+        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.visibleSessions.map(\.id))
     }
 
     private var island: some View {
