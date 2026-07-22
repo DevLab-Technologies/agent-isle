@@ -7,6 +7,9 @@ enum DefaultsKeys {
     static let notchWidthAdjust = "notchWidthAdjust"
     static let notchHeightAdjust = "notchHeightAdjust"
     static let displayMode = "displayMode"
+    /// Custom "jump to session" rules. Read directly by the actor-free `Jumper` as well as
+    /// `AppSettings`, so the key must live here alongside the other cross-cutting keys.
+    static let jumpRules = "jumpRules"
 }
 
 /// Where the island surfaces itself. Notched Macs default to `.notch`; everything else
@@ -79,6 +82,13 @@ final class AppSettings: ObservableObject {
     /// Built-in preset: hide short-lived internal helper ("probe"/"worker") sessions.
     @Published var hideProbeWorkers: Bool {
         didSet { d.set(hideProbeWorkers, forKey: Key.hideProbeWorkers) }
+    }
+
+    // MARK: Jump rules
+    /// User rules overriding how "Jump" focuses a session. Consulted by `Jumper` before its
+    /// built-in behavior. Persisted as JSON, mirroring the session-filters pattern.
+    @Published var jumpRules: [JumpRule] {
+        didSet { JumpRule.save(jumpRules, to: d) }
     }
 
     // MARK: Behavior
@@ -222,6 +232,7 @@ final class AppSettings: ObservableObject {
         quietWhenScreenSharing = d.bool(forKey: Key.quietWhenScreenSharing)
         hideProbeWorkers = d.bool(forKey: Key.hideProbeWorkers)
         sessionFilters = AppSettings.loadFilters(from: d)
+        jumpRules = JumpRule.load(from: d)
         expandOnHover = d.bool(forKey: Key.expandOnHover)
         hideInFullscreen = d.bool(forKey: Key.hideInFullscreen)
         autoExpandOnAttention = d.bool(forKey: Key.autoExpandOnAttention)
