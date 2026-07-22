@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - General
 
@@ -412,10 +414,7 @@ private struct SliderRow: View {
 struct SoundSettings: View {
     @EnvironmentObject var settings: AppSettings
 
-    private let previews: [(String, SoundPlayer.Event)] = [
-        ("Attention", .attention), ("Approve", .approve), ("Deny", .deny),
-        ("Select", .select), ("Done", .done),
-    ]
+    private let events = SoundPlayer.Event.allCases
 
     var body: some View {
         SettingsScaffold(section: .sound) {
@@ -437,31 +436,72 @@ struct SoundSettings: View {
                 }
             }
 
-            SettingsGroup(title: "Preview",
-                          footnote: "Tap to hear each cue.") {
-                let cols = [GridItem(.adaptive(minimum: 110), spacing: 8)]
-                LazyVGrid(columns: cols, spacing: 8) {
-                    ForEach(Array(previews.enumerated()), id: \.offset) { _, item in
-                        Button {
-                            let wasEnabled = SoundPlayer.shared.enabled
-                            SoundPlayer.shared.enabled = true          // always audible for preview
-                            SoundPlayer.shared.play(item.1)
-                            SoundPlayer.shared.enabled = wasEnabled
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "play.circle.fill").foregroundStyle(.green)
-                                Text(item.0).font(.system(size: 12))
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 10).padding(.vertical, 7)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.05)))
-                        }
-                        .buttonStyle(.plain)
-                    }
+            SettingsGroup(title: "Sound Pack",
+                          footnote: "Replace any cue with your own audio (.wav, .aiff, .mp3). Cues without a custom file use the built-in chiptune sound. Tap play to preview.") {
+                ForEach(Array(events.enumerated()), id: \.element) { idx, event in
+                    CustomSoundRow(event: event,
+                                   showsDivider: idx < events.count - 1)
+                        .environmentObject(settings)
                 }
-                .padding(12)
             }
         }
+    }
+}
+
+/// One sound event: a play/preview button, the current source (custom filename or the
+/// built-in cue), and Import / Clear controls.
+private struct CustomSoundRow: View {
+    @EnvironmentObject var settings: AppSettings
+    let event: SoundPlayer.Event
+    var showsDivider: Bool = true
+
+    private var override: URL? { settings.soundPack.url(for: event) }
+
+    var body: some View {
+        SettingsRow(title: event.label,
+                    subtitle: sourceLabel,
+                    showsDivider: showsDivider) {
+            HStack(spacing: 8) {
+                Button(action: preview) {
+                    Image(systemName: "play.circle.fill").foregroundStyle(.green)
+                        .font(.system(size: 15))
+                }
+                .buttonStyle(.plain)
+                .help("Preview")
+
+                Button(override == nil ? "Import…" : "Replace…", action: importFile)
+
+                if override != nil {
+                    Button("Clear") { settings.setCustomSound(nil, for: event) }
+                }
+            }
+        }
+    }
+
+    private var sourceLabel: String {
+        guard let url = override else { return "Built-in chiptune cue." }
+        let missing = !FileManager.default.fileExists(atPath: url.path)
+        return missing ? "Missing: \(url.lastPathComponent) — using built-in cue."
+                       : "Custom: \(url.lastPathComponent)"
+    }
+
+    private func preview() {
+        let wasEnabled = SoundPlayer.shared.enabled
+        SoundPlayer.shared.enabled = true          // always audible for preview
+        SoundPlayer.shared.play(event)
+        SoundPlayer.shared.enabled = wasEnabled
+    }
+
+    private func importFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.wav, .aiff, .mp3, .audio]
+        panel.prompt = "Choose"
+        panel.message = "Choose an audio file for the \(event.label) cue."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        settings.setCustomSound(url, for: event)
     }
 }
 

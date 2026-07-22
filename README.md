@@ -34,11 +34,28 @@ Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB R
 - **Click to jump** — click a session to focus its terminal or IDE (detected via
   `TERM_PROGRAM`, so a session in VS Code's integrated terminal opens VS Code).
 - **Filter tabs** — Monitor / Approve / Ask.
-- **8-bit sound alerts** — synthesized chiptune cues (no audio files).
+- **8-bit sound alerts** — synthesized chiptune cues, or bring your own: override any
+  cue with a custom `.wav` / `.aiff` / `.mp3` in Settings → Sound.
 - **Fully local** — the only moving part is a `localhost` event server; nothing leaves
   your machine.
 
-## Download
+## Install
+
+### Homebrew
+
+```bash
+brew install --cask DevLab-Technologies/tap/agent-isle
+```
+
+Homebrew downloads the latest release, verifies it, and drops **Agent Isle.app** in
+`/Applications`. Upgrade with `brew upgrade --cask agent-isle` (the in-app updater also
+keeps it current).
+
+> The cask formula lives in [`Casks/agent-isle.rb`](Casks/agent-isle.rb). Publishing it
+> to the `DevLab-Technologies/homebrew-tap` repository is a pending follow-up; until that
+> tap is live, use the direct download below.
+
+### Direct download
 
 Grab the latest prebuilt app from the [Releases page](https://github.com/DevLab-Technologies/agent-isle/releases/latest)
 (see the version and total-downloads badges above). Download `Agent-Isle.zip`, unzip it,
@@ -142,10 +159,13 @@ Sources/AgentIsle/
     CursorHookInstaller.swift  Same for Cursor's ~/.cursor/hooks.json
     Jumper.swift          Focus a session's terminal/IDE
   Sound/
-    SoundPlayer.swift     Runtime-synthesized square-wave alerts
+    SoundPlayer.swift     Runtime-synthesized square-wave alerts + custom-file playback
+    SoundPack.swift       Pure event -> custom-audio-file resolution
+Casks/
+  agent-isle.rb           Homebrew cask (points at the GitHub release zip)
 Scripts/
   bundle.sh               Package the binary into a .app
-  release.sh              Universal build + (optional) notarization + zip
+  release.sh              Universal build + (optional) notarization + zip + cask sha256
   install-hooks.sh        Register Claude Code hooks
   uninstall-hooks.sh      Remove them
   agent-isle-hook.py      Claude Code -> island bridge (approvals from the notch)
