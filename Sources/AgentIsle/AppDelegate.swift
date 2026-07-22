@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var switcherHotKey: GlobalHotKey?
     private var switcherPanel: SwitcherPanel?
     private var fullscreenMonitor: FullscreenMonitor?
+    private var memoryWatchdog: MemoryWatchdog?
     /// True while we've raised the activation policy to `.regular` for the Settings window,
     /// so we know to lower it back to `.accessory` once that window closes.
     private var regularForSettings = false
@@ -158,6 +159,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Check GitHub for a newer release and prompt / auto-install.
         Updater.shared.store = store
         Updater.shared.start()
+
+        // Memory safety net (off by default): relaunch if the process's footprint stays
+        // high across consecutive checks, but never while a session is mid-prompt.
+        let watchdog = MemoryWatchdog()
+        watchdog.start(store: store)
+        memoryWatchdog = watchdog
 
         // Global session switcher. Skip in capture modes so it doesn't interfere.
         if !settingsCapture && !demoLaunch {

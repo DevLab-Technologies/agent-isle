@@ -68,6 +68,15 @@ struct GeneralSettings: View {
                         .labelsHidden().toggleStyle(.switch)
                 }
             }
+
+            SettingsGroup(title: "Stability",
+                          footnote: "A safety net for long uptimes: if Agent Isle's memory stays unusually high, it relaunches itself in the background. It never restarts while a session is waiting on you. Off by default.") {
+                SettingsRow(title: "Restart on High Memory",
+                            subtitle: "Automatically relaunch if memory use stays above a safe limit.",
+                            showsDivider: false) {
+                    Toggle("", isOn: $settings.autoRestartOnHighMemory).labelsHidden().toggleStyle(.switch)
+                }
+            }
         }
         .onAppear { launchAtLogin = LaunchAtLogin.isEnabled }
     }
@@ -553,6 +562,7 @@ struct AboutSettings: View {
     private let repoURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle")!
     private let issuesURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle/issues")!
     @State private var reportingProblem = false
+    @State private var channel = Updater.shared.channel
 
     var body: some View {
         SettingsScaffold(section: .about) {
@@ -564,9 +574,22 @@ struct AboutSettings: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
 
-            SettingsGroup(title: "Updates") {
+            SettingsGroup(title: "Updates",
+                          footnote: "The Beta channel offers pre-release builds before they're promoted to stable.") {
                 SettingsRow(title: "Check for Updates…") {
                     Button("Check Now") { Updater.shared.checkForUpdates(userInitiated: true) }
+                }
+                SettingsRow(title: "Update Channel",
+                            subtitle: "Follow stable releases only, or opt into betas.") {
+                    Picker("", selection: $channel) {
+                        ForEach(UpdateChannel.allCases) { ch in
+                            Text(ch.title).tag(ch)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 220)
+                    .onChange(of: channel) { _, newValue in Updater.shared.channel = newValue }
                 }
                 SettingsRow(title: "Install Updates Automatically",
                             subtitle: "Download and apply new releases in the background.",
@@ -578,10 +601,15 @@ struct AboutSettings: View {
                 }
             }
 
-            SettingsGroup(title: "Feedback") {
+            SettingsGroup(title: "Feedback",
+                          footnote: "Export Diagnostics saves a plain-text report (app and macOS versions, integration health, and recent log lines). It contains metadata only — no session or chat content.") {
                 SettingsRow(title: "Report a Problem",
                             subtitle: "Compose a bug report with diagnostics attached.") {
                     Button("Report…") { reportingProblem = true }
+                }
+                SettingsRow(title: "Export Diagnostics…",
+                            subtitle: "Save a support report to share when something isn't working.") {
+                    Button("Export…", action: exportDiagnostics)
                 }
                 LinkRow(title: "Browse Issues", value: "GitHub Issues", url: issuesURL, showsDivider: false)
             }
@@ -596,6 +624,19 @@ struct AboutSettings: View {
             .controlSize(.large)
         }
         .sheet(isPresented: $reportingProblem) { ReportProblemView() }
+    }
+
+    /// Gather the diagnostics report and let the user save it via a save panel.
+    private func exportDiagnostics() {
+        let report = DiagnosticsReport.build()
+        let panel = NSSavePanel()
+        panel.title = "Export Diagnostics"
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = DiagnosticsReport.defaultFileName()
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? report.write(to: url, atomically: true, encoding: .utf8)
+        }
     }
 }
 

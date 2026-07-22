@@ -142,6 +142,13 @@ final class AppSettings: ObservableObject {
         didSet { d.set(collapsedStyle.rawValue, forKey: Key.collapsedStyle) }
     }
 
+    /// Conservative safety net: when on, a watchdog relaunches the app if its resident
+    /// memory stays above a high threshold across consecutive checks. Off by default and
+    /// never fires while a session is mid-prompt (see `MemoryWatchdog`).
+    @Published var autoRestartOnHighMemory: Bool {
+        didSet { d.set(autoRestartOnHighMemory, forKey: Key.autoRestartOnHighMemory) }
+    }
+
     /// Hide the notch island while a frontmost window is in fullscreen (the notch is
     /// occluded there anyway). Only affects the notch surface; the menu-bar panel is
     /// unaffected. Re-evaluated by the app whenever the active space or fullscreen
@@ -231,6 +238,7 @@ final class AppSettings: ObservableObject {
         static let autoHideWhenEmpty = "autoHideWhenEmpty"
         static let clickToJump = "clickToJump"
         static let collapsedStyle = "collapsedStyle"
+        static let autoRestartOnHighMemory = "autoRestartOnHighMemory"
         static let hideInFullscreen = "hideInFullscreen"
         static let autoExpandOnAttention = "autoExpandOnAttention"
         static let smartSuppression = "smartSuppression"
@@ -266,6 +274,7 @@ final class AppSettings: ObservableObject {
             Key.autoHideWhenEmpty: false,
             Key.clickToJump: true,
             Key.collapsedStyle: CollapsedStyle.detailed.rawValue,
+            Key.autoRestartOnHighMemory: false,
             Key.hideInFullscreen: true,
             Key.autoExpandOnAttention: true,
             Key.smartSuppression: true,
@@ -299,6 +308,7 @@ final class AppSettings: ObservableObject {
         autoHideWhenEmpty = d.bool(forKey: Key.autoHideWhenEmpty)
         clickToJump = d.bool(forKey: Key.clickToJump)
         collapsedStyle = CollapsedStyle(rawValue: d.string(forKey: Key.collapsedStyle) ?? "") ?? .detailed
+        autoRestartOnHighMemory = d.bool(forKey: Key.autoRestartOnHighMemory)
         hideInFullscreen = d.bool(forKey: Key.hideInFullscreen)
         autoExpandOnAttention = d.bool(forKey: Key.autoExpandOnAttention)
         smartSuppression = d.bool(forKey: Key.smartSuppression)
