@@ -123,8 +123,57 @@ struct CLIIntegration: Identifiable {
         hook: nil,
         historyDir: nil)
 
+    // Monitor-only agents whose sessions are read from history (no hook mechanism). Each
+    // appears in settings only when its config/data location exists (`hasCLI`), so an
+    // absent or assumed path simply hides the row rather than showing a wrong status. The
+    // paths mirror the scanners in `ExternalAgents`, the single source of truth.
+
+    static let codex = CLIIntegration(
+        agent: .codex,
+        configDir: home.appendingPathComponent(".codex"),
+        hook: nil,
+        historyDir: home.appendingPathComponent(".codex/sessions"))
+
+    static let opencode = CLIIntegration(
+        agent: .opencode,
+        configDir: home.appendingPathComponent(".local/share/opencode"),
+        hook: nil,
+        historyDir: home.appendingPathComponent(".local/share/opencode/storage/session"))
+
+    static let goose = CLIIntegration(
+        agent: .goose,
+        configDir: home.appendingPathComponent(".local/share/goose"),
+        hook: nil,
+        historyDir: home.appendingPathComponent(".local/share/goose/sessions"))
+
+    // Qwen Code's layout is assumed to mirror Gemini CLI's under `~/.qwen` (see
+    // ExternalAgents); the presence gate means it only shows if that path exists.
+    static let qwen = CLIIntegration(
+        agent: .qwen,
+        configDir: home.appendingPathComponent(".qwen"),
+        hook: nil,
+        historyDir: home.appendingPathComponent(".qwen/tmp"))
+
+    // Cline is a VS Code-family extension, not a CLI. This entry detects the VS Code
+    // ("Code") host; the extension under other hosts (Cursor, Windsurf) isn't covered by
+    // this single path but is still picked up by the session scanner.
+    static let cline = CLIIntegration(
+        agent: .cline,
+        configDir: home.appendingPathComponent("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev"),
+        hook: nil,
+        historyDir: home.appendingPathComponent("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks"))
+
+    // Aider has no central registry — it writes `.aider.chat.history.md` into whatever
+    // directory it runs in, so only the home-dir copy is detectable from a fixed path.
+    static let aider = CLIIntegration(
+        agent: .aider,
+        configDir: home.appendingPathComponent(".aider.chat.history.md"),
+        hook: nil,
+        historyDir: home.appendingPathComponent(".aider.chat.history.md"))
+
     /// Every integration Agent Isle knows about, hook-capable first.
-    static let all: [CLIIntegration] = [claude, cursor, grok, copilot, gemini]
+    static let all: [CLIIntegration] = [claude, cursor, grok, copilot, gemini,
+                                        codex, opencode, goose, qwen, cline, aider]
 
     /// The subset that can install a hook.
     static var hookCapable: [CLIIntegration] { all.filter { $0.hook != nil } }
