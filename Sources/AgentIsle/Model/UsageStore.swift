@@ -50,14 +50,21 @@ struct UsageBar: Identifiable {
 /// Loads and caches historical usage, exposes filtered aggregates for the Usage view.
 @MainActor
 final class UsageStore: ObservableObject {
+    /// Shared instance so the live island header and the settings pane read from (and
+    /// warm) the same mtime-keyed cache instead of scanning transcripts twice.
+    static let shared = UsageStore()
+
     @Published private(set) var records: [UsageAnalytics.Record] = []
+    /// Recent timestamped token events (roughly the last week), feeding the rolling-window
+    /// readouts. Kept alongside `records`, which are too coarse (day-bucketed) for a 5-hour window.
+    @Published private(set) var events: [UsageAnalytics.Event] = []
     @Published private(set) var loading = false
 
     @Published var range: UsageRange = .month
     @Published var grouping: UsageGrouping = .day
 
     /// Per-file cache keyed by path, invalidated when the file's mtime changes.
-    private var cache: [String: (mtime: Date, records: [UsageAnalytics.Record])] = [:]
+    private var cache: [String: (mtime: Date, records: [UsageAnalytics.Record], events: [UsageAnalytics.Event])] = [:]
     private let projectsDir: URL
 
     init() {
@@ -68,10 +75,11 @@ final class UsageStore: ObservableObject {
         self.projectsDir = base.appendingPathComponent("projects")
     }
 
-    /// Test seam: seed records directly, bypassing the disk scan.
-    convenience init(records: [UsageAnalytics.Record]) {
+    /// Test seam: seed records (and optionally events) directly, bypassing the disk scan.
+    convenience init(records: [UsageAnalytics.Record], events: [UsageAnalytics.Event] = []) {
         self.init()
         self.records = records
+        self.events = events
     }
 
     /// Background queue for the (blocking) transcript reads, kept off both the main actor
@@ -89,14 +97,16 @@ final class UsageStore: ObservableObject {
         let files = UsageAnalytics.transcripts(in: projectsDir)
 
         // Split into cached vs. needs-scan.
-        var merged: [UsageAnalytics.Record] = []
-        var newCache: [String: (mtime: Date, records: [UsageAnalytics.Record])] = [:]
+        var mergedRecords: [UsageAnalytics.Record] = []
+        var mergedEvents: [UsageAnalytics.Event] = []
+        var newCache: [String: (mtime: Date, records: [UsageAnalytics.Record], events: [UsageAnalytics.Event])] = [:]
         var toScan: [(url: URL, mtime: Date, folder: String)] = []
         for f in files {
             let key = f.url.path
             if let c = cache[key], c.mtime == f.mtime {
                 newCache[key] = c
-                merged += c.records
+                mergedRecords += c.records
+                mergedEvents += c.events
             } else {
                 toScan.append((f.url, f.mtime, f.url.deletingLastPathComponent().lastPathComponent))
             }
@@ -108,25 +118,27 @@ final class UsageStore: ObservableObject {
             // Capture an immutable snapshot and collect through a Sendable, lock-guarded sink
             // so nothing mutable is captured in the concurrent closure.
             let items = toScan
-            let scanned: [(String, Date, [UsageAnalytics.Record])] = await withCheckedContinuation { cont in
+            let scanned: [(String, Date, [UsageAnalytics.Record], [UsageAnalytics.Event])] = await withCheckedContinuation { cont in
                 Self.scanQueue.async {
                     let sink = ScanSink()
                     DispatchQueue.concurrentPerform(iterations: items.count) { i in
                         let item = items[i]
-                        let recs = UsageAnalytics.scanFile(item.url, folderName: item.folder)
-                        sink.add((item.url.path, item.mtime, recs))
+                        let result = UsageAnalytics.scan(item.url, folderName: item.folder)
+                        sink.add((item.url.path, item.mtime, result.records, result.events))
                     }
                     cont.resume(returning: sink.drain())
                 }
             }
-            for (path, mtime, recs) in scanned {
-                newCache[path] = (mtime, recs)
-                merged += recs
+            for (path, mtime, recs, evs) in scanned {
+                newCache[path] = (mtime, recs, evs)
+                mergedRecords += recs
+                mergedEvents += evs
             }
         }
 
         cache = newCache
-        records = merged
+        records = mergedRecords
+        events = mergedEvents
     }
 
     // MARK: - Derived
@@ -143,6 +155,38 @@ final class UsageStore: ObservableObject {
     var sessionCount: Int { Set(filtered.map(\.sessionID)).count }
     var projectCount: Int { Set(filtered.map(\.project)).count }
     var isEmpty: Bool { filtered.isEmpty }
+
+    // MARK: - Rolling windows
+
+    /// Rolling-window usage for `agent`, summed from the recent timestamped events against
+    /// the current clock. Returns nil when the agent has no window model, or when there's
+    /// nothing to show (no recent events *and* no known cap — e.g. an agent whose token
+    /// source isn't wired into the scanner yet).
+    func windowUsage(for agent: AgentKind, now: Date = Date()) -> AgentWindowUsage? {
+        let windows = agent.usageWindows
+        guard !windows.isEmpty else { return nil }
+
+        let agentEvents = events.filter { $0.agent == agent }
+        let anyCap = windows.contains { UsageCaps.cap(agent: agent, window: $0) != nil }
+        guard !agentEvents.isEmpty || anyCap else { return nil }
+
+        let cal = Calendar.current
+        let stats = windows.map { window -> WindowStat in
+            let start = window.start(now: now, calendar: cal)
+            let used = agentEvents.reduce(0) { $0 + ($1.timestamp >= start ? $1.tokens : 0) }
+            return WindowStat(window: window, usedTokens: used,
+                              cap: UsageCaps.cap(agent: agent, window: window))
+        }
+        return AgentWindowUsage(agent: agent, stats: stats)
+    }
+
+    /// Every agent that currently has a window readout to show, in a stable display order.
+    var activeWindowUsages: [AgentWindowUsage] {
+        let present = Set(events.map(\.agent))
+        return AgentKind.allCases
+            .filter { present.contains($0) }
+            .compactMap { windowUsage(for: $0) }
+    }
 
     /// The bars/rows to plot for the current grouping, ordered for display.
     var bars: [UsageBar] {
@@ -209,12 +253,12 @@ final class UsageStore: ObservableObject {
 /// Sendable` so it can be captured (as a `let`) and mutated safely inside a
 /// `concurrentPerform` closure without tripping strict-concurrency capture rules.
 private final class ScanSink: @unchecked Sendable {
-    private var out: [(String, Date, [UsageAnalytics.Record])] = []
+    private var out: [(String, Date, [UsageAnalytics.Record], [UsageAnalytics.Event])] = []
     private let lock = NSLock()
-    func add(_ entry: (String, Date, [UsageAnalytics.Record])) {
+    func add(_ entry: (String, Date, [UsageAnalytics.Record], [UsageAnalytics.Event])) {
         lock.lock(); out.append(entry); lock.unlock()
     }
-    func drain() -> [(String, Date, [UsageAnalytics.Record])] {
+    func drain() -> [(String, Date, [UsageAnalytics.Record], [UsageAnalytics.Event])] {
         lock.lock(); defer { lock.unlock() }; return out
     }
 }

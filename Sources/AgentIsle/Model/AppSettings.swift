@@ -88,6 +88,9 @@ final class AppSettings: ObservableObject {
     @Published var showModel: Bool { didSet { d.set(showModel, forKey: Key.showModel) } }
     @Published var showSubAgents: Bool { didSet { d.set(showSubAgents, forKey: Key.showSubAgents) } }
 
+    /// Show the compact rolling-usage readout (5h / 7d, etc.) in the expanded-island header.
+    @Published var showUsageReadout: Bool { didSet { d.set(showUsageReadout, forKey: Key.showUsageReadout) } }
+
     // MARK: Display / notch tuning
     /// Manual offsets (pts) added to the OS-reported notch size; 0 uses the API value.
     @Published var notchWidthAdjust: Double {
@@ -121,6 +124,7 @@ final class AppSettings: ObservableObject {
         static let showTasks = "showTasks"
         static let showModel = "showModel"
         static let showSubAgents = "showSubAgents"
+        static let showUsageReadout = "showUsageReadout"
         static let notchWidthAdjust = DefaultsKeys.notchWidthAdjust
         static let notchHeightAdjust = DefaultsKeys.notchHeightAdjust
         static let maxPanelWidth = "maxPanelWidth"
@@ -142,6 +146,7 @@ final class AppSettings: ObservableObject {
             Key.showTasks: true,
             Key.showModel: true,
             Key.showSubAgents: true,
+            Key.showUsageReadout: true,
             Key.notchWidthAdjust: 0,
             Key.notchHeightAdjust: 0,
             Key.maxPanelWidth: 480,
@@ -159,6 +164,7 @@ final class AppSettings: ObservableObject {
         showTasks = d.bool(forKey: Key.showTasks)
         showModel = d.bool(forKey: Key.showModel)
         showSubAgents = d.bool(forKey: Key.showSubAgents)
+        showUsageReadout = d.bool(forKey: Key.showUsageReadout)
         notchWidthAdjust = d.double(forKey: Key.notchWidthAdjust)
         notchHeightAdjust = d.double(forKey: Key.notchHeightAdjust)
         maxPanelWidth = d.double(forKey: Key.maxPanelWidth)

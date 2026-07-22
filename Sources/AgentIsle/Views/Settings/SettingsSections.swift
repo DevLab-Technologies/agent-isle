@@ -191,8 +191,13 @@ struct DisplaySettings: View {
                             subtitle: "List the background sub-agents a session spawned and their progress.") {
                     Toggle("", isOn: $settings.showSubAgents).labelsHidden().toggleStyle(.switch)
                 }
-                SettingsRow(title: "Show Terminal", showsDivider: false) {
+                SettingsRow(title: "Show Terminal") {
                     Toggle("", isOn: $settings.showTerminal).labelsHidden().toggleStyle(.switch)
+                }
+                SettingsRow(title: "Show Usage Readout",
+                            subtitle: "Compact rolling-window usage (5h / 7d) for the focused agent, in the expanded header.",
+                            showsDivider: false) {
+                    Toggle("", isOn: $settings.showUsageReadout).labelsHidden().toggleStyle(.switch)
                 }
             }
 

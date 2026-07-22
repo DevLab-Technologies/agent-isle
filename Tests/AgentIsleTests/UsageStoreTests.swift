@@ -47,4 +47,62 @@ final class UsageStoreTests: XCTestCase {
         store.grouping = .day
         XCTAssertNotNil(store.bars.first?.date, "day bars must expose a Date for the chart axis")
     }
+
+    // MARK: - Rolling windows
+
+    private func event(_ agent: AgentKind, agoHours: Double, tokens: Int,
+                       from now: Date) -> UsageAnalytics.Event {
+        UsageAnalytics.Event(agent: agent,
+                             timestamp: now.addingTimeInterval(-agoHours * 3600),
+                             tokens: tokens)
+    }
+
+    func testWindowSumsRespectTheRollingBoundaries() {
+        let now = Date()
+        let store = UsageStore(records: [], events: [
+            event(.claude, agoHours: 1, tokens: 100, from: now),    // in 5h and 7d
+            event(.claude, agoHours: 4, tokens: 50, from: now),     // in 5h and 7d
+            event(.claude, agoHours: 30, tokens: 40, from: now),    // only in 7d
+            event(.claude, agoHours: 24 * 8, tokens: 999, from: now), // outside both
+        ])
+
+        let usage = store.windowUsage(for: .claude, now: now)
+        XCTAssertNotNil(usage)
+        let byWindow = Dictionary(uniqueKeysWithValues: usage!.stats.map { ($0.window, $0) })
+        XCTAssertEqual(byWindow[.fiveHour]?.usedTokens, 150)
+        XCTAssertEqual(byWindow[.sevenDay]?.usedTokens, 190)
+    }
+
+    func testNoCapMeansTotalsAndNoPercentage() {
+        let now = Date()
+        let store = UsageStore(records: [], events: [
+            event(.claude, agoHours: 1, tokens: 1_200_000, from: now),
+        ])
+        let usage = store.windowUsage(for: .claude, now: now)
+        XCTAssertEqual(usage?.hasKnownCap, false, "no caps are hardcoded by default")
+        let five = usage?.stats.first { $0.window == .fiveHour }
+        XCTAssertNil(five?.fraction, "without a cap there is no percentage")
+        XCTAssertEqual(five?.display, "1.2M", "falls back to the raw rolling total")
+    }
+
+    func testAgentWithoutWindowModelHasNoReadout() {
+        let now = Date()
+        let store = UsageStore(records: [], events: [
+            event(.gemini, agoHours: 1, tokens: 100, from: now),
+        ])
+        XCTAssertNil(store.windowUsage(for: .gemini, now: now),
+                     "gemini has no known window model")
+    }
+
+    func testWindowUsageIsScopedPerAgent() {
+        let now = Date()
+        let store = UsageStore(records: [], events: [
+            event(.claude, agoHours: 1, tokens: 100, from: now),
+            event(.codex, agoHours: 1, tokens: 70, from: now),
+        ])
+        XCTAssertEqual(store.windowUsage(for: .claude, now: now)?
+            .stats.first { $0.window == .fiveHour }?.usedTokens, 100)
+        XCTAssertEqual(store.windowUsage(for: .codex, now: now)?
+            .stats.first { $0.window == .fiveHour }?.usedTokens, 70)
+    }
 }

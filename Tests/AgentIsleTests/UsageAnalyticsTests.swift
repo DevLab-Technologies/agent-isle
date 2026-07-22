@@ -59,7 +59,34 @@ final class UsageAnalyticsTests: XCTestCase {
         XCTAssertEqual(records[0].tokens, 7)
     }
 
+    func testScanEmitsRecentEventsAndDropsOldOnes() throws {
+        let now = Date()
+        // A recent line (2h ago) and an old one (10 days ago) via absolute timestamps.
+        let recent = isoLine(at: now.addingTimeInterval(-2 * 3600), input: 30, output: 20, cwd: "/Users/me/app")
+        let old = isoLine(at: now.addingTimeInterval(-10 * 24 * 3600), input: 5, output: 5, cwd: "/Users/me/app")
+        let url = try write([old, recent], name: "sess-events.jsonl")
+
+        let result = UsageAnalytics.scan(url, folderName: "-Users-me-app", now: now)
+        // Records keep the full history; events keep only the recent line.
+        XCTAssertEqual(result.records.reduce(0) { $0 + $1.tokens }, 60)
+        XCTAssertEqual(result.events.count, 1, "only the event within the recent window is kept")
+        XCTAssertEqual(result.events.first?.tokens, 50)
+        XCTAssertEqual(result.events.first?.agent, .claude)
+    }
+
     // MARK: - Helpers
+
+    private func isoLine(at date: Date, input: Int, output: Int, cwd: String) -> String {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let obj: [String: Any] = [
+            "type": "assistant",
+            "timestamp": fmt.string(from: date),
+            "cwd": cwd,
+            "message": ["usage": ["input_tokens": input, "output_tokens": output]],
+        ]
+        return String(decoding: try! JSONSerialization.data(withJSONObject: obj), as: UTF8.self)
+    }
 
     private func usageLine(day: String, input: Int, output: Int, cacheCreate: Int,
                            cacheRead: Int, cwd: String) -> String {
