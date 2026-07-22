@@ -28,6 +28,12 @@ enum Jumper {
     ]
 
     static func jump(to session: AgentSession) {
+        // User rules win: if one matches and can act, honor it and stop.
+        if let rule = JumpRule.firstMatch(for: session, in: .standard),
+           applyUserRule(rule, to: session) {
+            return
+        }
+
         // Prefer the exact host app the hook reported via TERM_PROGRAM.
         let bundle = session.terminalBundleID ?? bundleIDs[session.terminal]
 
@@ -49,10 +55,27 @@ enum Jumper {
         }
     }
 
-    private static func activate(bundleID: String) {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
+    /// Apply a matched user rule. Returns false when the rule can't act (empty/invalid
+    /// value, or the target app isn't installed), so `jump` falls back to built-in behavior.
+    private static func applyUserRule(_ rule: JumpRule, to session: AgentSession) -> Bool {
+        switch rule.strategy {
+        case .activateBundle:
+            guard let bundleID = rule.activationBundleID else { return false }
+            return activate(bundleID: bundleID)
+        case .openURL:
+            guard let url = rule.resolvedURL(workspacePath: session.workspacePath) else { return false }
+            NSWorkspace.shared.open(url)
+            return true
+        }
+    }
+
+    /// Bring the app with `bundleID` forward. Returns false when it isn't installed.
+    @discardableResult
+    private static func activate(bundleID: String) -> Bool {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return false }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: config)
+        return true
     }
 }
