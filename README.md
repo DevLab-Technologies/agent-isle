@@ -31,8 +31,9 @@ Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB R
 - **Approve from the notch** — for Claude Code and Cursor, permission requests render an
   inline diff with Deny (⌘N) / Allow (⌘Y); the decision flows straight back to the agent.
 - **Answer questions** — multiple-choice prompts answered right in the island.
-- **Click to jump** — click a session to focus its terminal or IDE (detected via
-  `TERM_PROGRAM`, so a session in VS Code's integrated terminal opens VS Code).
+- **Click to jump** — click a session to focus the exact session, not just its host app
+  (detected via `TERM_PROGRAM`): editors focus the window already open on the workspace
+  (via the bundled `code`/`cursor` CLI), and Claude Desktop deep-links to the conversation.
 - **Filter tabs** — Monitor / Approve / Ask.
 - **8-bit sound alerts** — synthesized chiptune cues, or bring your own: override any
   cue with a custom `.wav` / `.aiff` / `.mp3` in Settings → Sound.
