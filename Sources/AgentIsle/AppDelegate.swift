@@ -125,10 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Task { @MainActor [weak self] in self?.notchWindow?.reposition() }
             }
 
-        // Offer to set up Claude Code approvals on launch (unless already done / opted out).
+        // Set up CLI approvals on launch (zero-config first run, gentle nudge after that;
+        // skipped entirely if the user opted out).
         if ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] != "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.maybePromptForHooks()
+                self?.runIntegrationSetup()
             }
         }
 
@@ -298,9 +299,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// A CLI whose hooks Agent Isle can install for notch approvals. Claude Code and
-    /// Cursor share the same shape (detect / installed? / install / remove), so the
-    /// launch prompt and gear menu drive both through this descriptor.
+    /// A CLI whose hooks Agent Isle can install for notch approvals. Built from the
+    /// `CLIIntegration` registry, so any hook-capable CLI added there appears here (and in
+    /// the launch setup and gear menu) automatically.
     struct HookTool {
         let name: String
         let hasTool: () -> Bool
@@ -309,19 +310,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let uninstall: () -> Bool
     }
 
-    static let hookTools: [HookTool] = [
-        HookTool(name: "Claude Code",
-                 hasTool: HookInstaller.hasClaudeCode, isInstalled: HookInstaller.isInstalled,
-                 install: HookInstaller.install, uninstall: HookInstaller.uninstall),
-        HookTool(name: "Cursor",
-                 hasTool: CursorHookInstaller.hasCursor, isInstalled: CursorHookInstaller.isInstalled,
-                 install: CursorHookInstaller.install, uninstall: CursorHookInstaller.uninstall),
-    ]
+    static let hookTools: [HookTool] = CLIIntegration.hookCapable.map { integration in
+        HookTool(name: integration.displayName,
+                 hasTool: integration.hasCLI,
+                 isInstalled: { integration.hook?.isInstalled() ?? false },
+                 install: { integration.hook?.install() ?? false },
+                 uninstall: { integration.hook?.uninstall() ?? true })
+    }
 
-    /// Every launch: for each detected CLI whose hooks aren't properly installed, offer to
-    /// install them in a single prompt. There's no permanent opt-out — we ask on each
-    /// launch until the hooks are in place, after which this stops firing on its own (see
-    /// each installer's `isInstalled`).
+    /// Zero-config setup. On the very first launch we auto-install hooks for every detected
+    /// hook-capable CLI (unless the user turned auto-setup off), then show a summary with an
+    /// Undo and a "keep doing this" toggle. After that first pass we fall back to gently
+    /// offering to finish any CLI whose hook still isn't in place, until it is.
+    private func runIntegrationSetup() {
+        guard AppSettings.shared.autoSetupIntegrations else { return }
+        if AppSettings.shared.integrationSetupDone {
+            maybePromptForHooks()
+        } else {
+            autoInstallIntegrations()
+        }
+    }
+
+    /// First-run auto-install: configure everything detected, report what changed.
+    private func autoInstallIntegrations() {
+        AppSettings.shared.integrationSetupDone = true
+        let pending = Self.hookTools.filter { $0.hasTool() && !$0.isInstalled() }
+        guard !pending.isEmpty else { return }
+
+        let installed = pending.filter { $0.install() }
+        guard !installed.isEmpty else { return }
+        let names = listNames(installed.map(\.name))
+
+        let alert = NSAlert()
+        alert.messageText = "Integrations ready"
+        alert.informativeText = """
+        Agent Isle set up notch approvals for \(names). Restart any running sessions for \
+        them to take effect. You can manage or remove these anytime in Settings › \
+        Integrations.
+        """
+        alert.addButton(withTitle: "Done")
+        alert.addButton(withTitle: "Undo")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Set up new integrations automatically"
+        alert.suppressionButton?.state = .on
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        if alert.suppressionButton?.state == .off {
+            AppSettings.shared.autoSetupIntegrations = false
+        }
+        if response == .alertSecondButtonReturn {           // Undo
+            installed.forEach { _ = $0.uninstall() }
+        }
+    }
+
+    /// Subsequent launches: for each detected CLI whose hooks aren't properly installed,
+    /// offer to install them in a single prompt. Stops firing on its own once the hooks are
+    /// in place (see each installer's `isInstalled`).
     private func maybePromptForHooks() {
         let pending = Self.hookTools.filter { $0.hasTool() && !$0.isInstalled() }
         guard !pending.isEmpty else { return }

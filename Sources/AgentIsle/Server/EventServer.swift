@@ -14,7 +14,9 @@ import AppKit
 @MainActor
 final class EventServer {
     static var shared: EventServer?
-    static let port: UInt16 = 4711
+    /// The loopback port CLI hooks POST to. `nonisolated` so non-UI helpers (the doctor,
+    /// the copy-command menu item) can read this constant without hopping to the main actor.
+    nonisolated static let port: UInt16 = 4711
 
     private let store: SessionStore
     private var listener: NWListener?
