@@ -111,6 +111,52 @@ def ask_question(base, tool_input):
     return True
 
 
+def review_plan(base, tool_input):
+    """Handle Claude's ExitPlanMode tool: show the plan in the notch as a Markdown card,
+    wait for the user to approve it or send feedback, and feed the result back to Claude.
+
+    Approval allows the tool (Claude proceeds with the plan). Feedback denies the tool with
+    the feedback as the reason, so Claude revises the plan instead of executing it — the same
+    allow/deny channel a PreToolUse hook is limited to.
+
+    Returns True when handled here (caller should exit). An empty plan, or a notch timeout /
+    abandonment, returns False so the caller falls back to Claude's own plan approval UI."""
+    plan = (tool_input.get("plan") or "").strip()
+    if not plan:
+        return False
+
+    result = post(dict(base, type="plan", plan=plan,
+                       message="Shared a plan for review"), timeout=TIMEOUT)
+    decision = result.get("decision")
+    # Empty means the card was abandoned; "deny" is the island's fail-safe reply when it
+    # couldn't encode a real decision — either way defer to Claude's native plan prompt.
+    if not decision or decision == "deny":
+        return False
+
+    if decision in ("approve", "allow", "yes"):
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "Plan approved from Agent Isle",
+            }
+        }))
+        return True
+
+    # Anything else is feedback: deny the plan and hand the feedback back for a revision.
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "The user reviewed the plan in Agent Isle and asked for changes:\n" + decision +
+                "\nRevise the plan accordingly and present it again."
+            ),
+        }
+    }))
+    return True
+
+
 def detect_terminal():
     """Identify the real host terminal/IDE from the CLI's environment.
 
@@ -195,6 +241,14 @@ def main():
                 if not ask_question(base, tin):
                     post(dict(base, type="status", status="working",
                               message="Asking a question"))
+                sys.exit(0)
+            # ExitPlanMode presents a plan, not a tool to gate. Surface it as a plan-review
+            # card so it can be approved (or sent back with feedback) from the notch. If it
+            # isn't handled there, report activity and let Claude's native plan prompt run.
+            if tool == "ExitPlanMode":
+                if not review_plan(base, tin):
+                    post(dict(base, type="status", status="working",
+                              message="Presented a plan"))
                 sys.exit(0)
             if should_ask(mode, tool):
                 event = dict(base, type="permission", tool=tool,
