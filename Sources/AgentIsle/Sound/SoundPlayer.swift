@@ -25,11 +25,16 @@ final class SoundPlayer {
     /// The single custom-file cue currently sounding, retained so ARC can't cut it off
     /// mid-playback. Holding one (not one per event) guarantees cues never overlap.
     private var currentFile: AVAudioPlayer?
-    /// Events can arrive in bursts — several sessions surfacing in one scan tick, an
-    /// event flood, or a retriggered hook. Cues landing within this window of the last
-    /// are dropped so a burst plays a single alert instead of a garbled pile-up.
+    /// A single event can arrive in a burst — several sessions surfacing the same alert
+    /// in one scan tick, an event flood, or a retriggered hook. A repeat of the *same*
+    /// event within this window is dropped so the burst plays one alert instead of a
+    /// garbled pile-up. Distinct events never suppress each other, so a decision cue is
+    /// never lost just because a different cue sounded moments earlier.
     private let coalesceWindow: TimeInterval = 0.15
-    private var lastPlayedAt: Date?
+    /// Per-event timestamp of the last *audible* cue (see `coalesceWindow`). Keyed by
+    /// event so alerts of different kinds stay independent, and bounded by the case
+    /// count. Monotonic (`DispatchTime`) so a system-clock change can't drop cues.
+    private var lastPlayed: [Event: DispatchTime] = [:]
 
     enum Event: String, CaseIterable {
         case attention   // needs a decision
@@ -70,25 +75,31 @@ final class SoundPlayer {
         engine.connect(player, to: engine.mainMixerNode, format: format)
     }
 
-    func play(_ event: Event) {
+    /// Plays the cue for `event`. `coalesce` collapses a burst of the *same* event into
+    /// one alert; explicit, user-driven plays (e.g. the settings preview) pass `false` so
+    /// they're always audible.
+    func play(_ event: Event, coalesce: Bool = true) {
         guard enabled else { return }
-        let now = Date()
-        if let last = lastPlayedAt, now.timeIntervalSince(last) < coalesceWindow { return }
-        lastPlayedAt = now
+        let now = DispatchTime.now()
+        if coalesce, let last = lastPlayed[event],
+           Double(now.uptimeNanoseconds - last.uptimeNanoseconds) / 1_000_000_000 < coalesceWindow {
+            return
+        }
 
-        // A new cue always replaces whatever is still sounding, so cues never overlap or
-        // stack into a jumble. Silence any custom-file cue up front; the synth node is
-        // flushed below via `.interrupts` (or by `playFile` when a file takes over).
+        // A new cue replaces whatever is still sounding, so cues never overlap or stack
+        // into a jumble: silence any custom-file cue up front, and the synth node is
+        // flushed by `.interrupts` in `playSynth` (or stopped by `playFile`).
         currentFile?.stop()
         currentFile = nil
 
-        if let url = pack.playableURL(for: event), playFile(url, for: event) { return }
-        ensureRunning()
-        let buffer = makeBuffer(for: event.notes)
-        // `.interrupts` flushes any still-queued/playing synth buffer so back-to-back
-        // events replace, rather than append to, the cue already sounding.
-        player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
-        if !player.isPlaying { player.play() }
+        // Prefer the user's custom file; fall back to the synthesized cue if it can't play.
+        var played = false
+        if let url = pack.playableURL(for: event) { played = playFile(url, for: event) }
+        if !played { played = playSynth(event.notes) }
+
+        // Start the coalesce window only once a cue has actually sounded, so a failed or
+        // silent attempt can't suppress the next real one.
+        if played { lastPlayed[event] = now }
     }
 
     /// Plays a user-provided audio file for `event`. Returns false (so the caller falls
@@ -107,11 +118,26 @@ final class SoundPlayer {
         }
     }
 
-    private func ensureRunning() {
+    /// Schedules the synthesized cue, replacing any still-playing synth buffer. Owns all
+    /// player-node playback state (start/restart), so the node has a single owner even
+    /// after `playFile` stops it. Returns false if the audio engine won't start.
+    @discardableResult
+    private func playSynth(_ notes: [(Double, Double)]) -> Bool {
+        ensureEngineRunning()
+        guard started else { return false }
+        let buffer = makeBuffer(for: notes)
+        // `.interrupts` flushes any still-queued/playing synth buffer so back-to-back
+        // events replace, rather than append to, the cue already sounding.
+        player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
+        if !player.isPlaying { player.play() }
+        return true
+    }
+
+    /// Starts the audio engine once. Node playback is owned by `playSynth`, not here.
+    private func ensureEngineRunning() {
         guard !started else { return }
         do {
             try engine.start()
-            player.play()
             started = true
         } catch {
             NSLog("SoundPlayer: audio engine failed to start: \(error)")
