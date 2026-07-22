@@ -19,10 +19,17 @@ final class IdeWatcher {
     private let activeWindow: TimeInterval = 8 * 60
     /// Treat a session as actively working if its transcript changed this recently.
     private let workingWindow: TimeInterval = 15
+    /// A hook-free session is only reported "done" once its transcript has been quiet this
+    /// long — well past `workingWindow`, so a brief mid-turn pause doesn't fire a false
+    /// completion. Balances notification latency against noise.
+    private let settledWindow: TimeInterval = 45
     /// Never show more than this many sessions at once.
     private let maxSessions = 10
 
     private var trackedIDs: Set<UUID> = []
+    /// Sessions we've already posted a "done" notification for during their current quiet
+    /// period; cleared when the session resumes working, so each completion notifies once.
+    private var doneNotified: Set<UUID> = []
     /// Cache of token totals keyed by session id, invalidated when the file changes.
     private var tokenCache: [String: (mtime: Date, tokens: Int)] = [:]
     /// Sessions whose token total is being recomputed off-main, so we don't queue a
@@ -144,11 +151,17 @@ final class IdeWatcher {
                 }
                 if newlySurfaced { SoundPlayer.shared.play(.attention) }
                 // A hook-free session has no explicit "done" event; its turn finishing shows
-                // up as the transcript going quiet, i.e. working -> idle. Notify once on that
-                // edge so completions are surfaced like hook-driven ones.
-                if existing.status == .working, !working,
-                   let finished = store.sessions.first(where: { $0.id == id }),
-                   finished.status == .idle {
+                // up as the transcript going quiet. Only notify once it's been quiet past
+                // `settledWindow` (not the moment it goes idle), so a brief mid-turn pause
+                // doesn't fire a false completion. Reset when it resumes so each turn's
+                // completion notifies exactly once.
+                if working {
+                    doneNotified.remove(id)
+                } else if Date().timeIntervalSince(c.mtime) >= settledWindow,
+                          !doneNotified.contains(id),
+                          let finished = store.sessions.first(where: { $0.id == id }),
+                          finished.status == .idle {
+                    doneNotified.insert(id)
                     Notifier.shared.notifyDone(session: finished, title: finished.title)
                 }
             } else {
@@ -204,6 +217,9 @@ final class IdeWatcher {
         }
 
         pruneMissing(current: found)
+        // Forget completion state for sessions that are no longer live, so a session id
+        // reappearing later can notify again.
+        doneNotified.formIntersection(found)
     }
 
     /// Last-known token total for a session, cached by transcript modification time. When
