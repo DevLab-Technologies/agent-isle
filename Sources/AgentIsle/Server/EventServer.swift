@@ -145,6 +145,7 @@ final class EventServer {
                 Notifier.shared.notifyPermission(session: session,
                                                  tool: request.toolName,
                                                  command: request.command)
+                VoiceAnnouncer.shared.announce(session: session, kind: .permission)
             }
             maybeAutoExpand(sessionID)
             park(conn, sessionID: sessionID)
@@ -163,6 +164,7 @@ final class EventServer {
             SoundPlayer.shared.play(.attention)
             if let session = store.sessions.first(where: { $0.id == sessionID }) {
                 Notifier.shared.notifyQuestion(session: session, summary: q.summary)
+                VoiceAnnouncer.shared.announce(session: session, kind: .question)
             }
             maybeAutoExpand(sessionID)
             park(conn, sessionID: sessionID)
@@ -182,6 +184,7 @@ final class EventServer {
             SoundPlayer.shared.play(.attention)
             if let session = store.sessions.first(where: { $0.id == sessionID }) {
                 Notifier.shared.notifyPlan(session: session, summary: plan.summary)
+                VoiceAnnouncer.shared.announce(session: session, kind: .plan)
             }
             maybeAutoExpand(sessionID)
             park(conn, sessionID: sessionID)
@@ -195,6 +198,7 @@ final class EventServer {
             SoundPlayer.shared.play(.done)
             if let session = store.sessions.first(where: { $0.id == sessionID }) {
                 Notifier.shared.notifyDone(session: session, title: session.title)
+                VoiceAnnouncer.shared.announce(session: session, kind: .done)
             }
             respond(on: conn, json: #"{"ok":true}"#)
 

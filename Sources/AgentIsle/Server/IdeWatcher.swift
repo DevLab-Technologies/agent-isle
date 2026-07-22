@@ -151,7 +151,12 @@ final class IdeWatcher {
                         }
                     }
                 }
-                if newlySurfaced { SoundPlayer.shared.play(.attention) }
+                if newlySurfaced {
+                    SoundPlayer.shared.play(.attention)
+                    if let surfaced = store.sessions.first(where: { $0.id == id }) {
+                        VoiceAnnouncer.shared.announce(session: surfaced, kind: .question)
+                    }
+                }
                 // A hook-free session has no explicit "done" event; its turn finishing shows
                 // up as the transcript going quiet. Only notify once it's been quiet past
                 // `settledWindow` (not the moment it goes idle), so a brief mid-turn pause
@@ -165,6 +170,7 @@ final class IdeWatcher {
                           finished.status == .idle {
                     doneNotified.insert(id)
                     Notifier.shared.notifyDone(session: finished, title: finished.title)
+                    VoiceAnnouncer.shared.announce(session: finished, kind: .done)
                 }
             } else {
                 if store.demoMode { store.stopDemo(); store.clearAll() }
@@ -187,7 +193,12 @@ final class IdeWatcher {
                     subAgents: subs,
                     workspacePath: activity.cwd,
                     transcriptURL: c.url))
-                if transcriptQuestion != nil { SoundPlayer.shared.play(.attention) }
+                if transcriptQuestion != nil {
+                    SoundPlayer.shared.play(.attention)
+                    if let surfaced = store.sessions.first(where: { $0.id == id }) {
+                        VoiceAnnouncer.shared.announce(session: surfaced, kind: .question)
+                    }
+                }
             }
         }
         // Forget cached sub-agents that are no longer active, so the cache can't grow

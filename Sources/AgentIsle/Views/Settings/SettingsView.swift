@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The sections shown in the settings sidebar.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, integrations, display, filters, jump, sound, usage, about
+    case general, integrations, display, filters, jump, sound, voice, usage, about
     var id: String { rawValue }
 
     var title: String {
@@ -13,6 +13,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .filters: return "Filters"
         case .jump: return "Jump"
         case .sound: return "Sound"
+        case .voice: return "Voice"
         case .usage: return "Usage"
         case .about: return "About"
         }
@@ -26,6 +27,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .filters: return "line.3.horizontal.decrease.circle.fill"
         case .jump: return "arrow.up.forward.app.fill"
         case .sound: return "speaker.wave.2.fill"
+        case .voice: return "waveform"
         case .usage: return "chart.bar.fill"
         case .about: return "info.circle.fill"
         }
@@ -39,6 +41,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .filters: return .orange
         case .jump: return .teal
         case .sound: return .green
+        case .voice: return .indigo
         case .usage: return .pink
         case .about: return .blue
         }
@@ -117,6 +120,7 @@ struct SettingsView: View {
         case .filters:      FiltersSettings()
         case .jump:         JumpSettings()
         case .sound:        SoundSettings()
+        case .voice:        VoiceSettings()
         case .usage:        UsageSettings(usage: usage)
         case .about:        AboutSettings()
         }

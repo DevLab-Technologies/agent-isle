@@ -36,8 +36,13 @@ Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB R
 - **Filter tabs** — Monitor / Approve / Ask.
 - **8-bit sound alerts** — synthesized chiptune cues, or bring your own: override any
   cue with a custom `.wav` / `.aiff` / `.mp3` in Settings → Sound.
-- **Fully local** — the only moving part is a `localhost` event server; nothing leaves
-  your machine.
+- **Voice callouts** — hear a spoken line when an agent finishes or needs you, with a
+  distinct voice per agent. Uses the on-device system voice by default (offline, free);
+  optionally bring your own OpenAI / ElevenLabs key for premium voices and your own
+  OpenAI / Anthropic key for AI-written summaries. See [Voice callouts](#voice-callouts).
+- **Fully local by default** — the only always-on moving part is a `localhost` event
+  server; nothing leaves your machine unless *you* opt into a cloud voice/summary provider
+  with your own API key.
 
 ## Install
 
@@ -128,6 +133,33 @@ curl -X POST http://localhost:4711/event -H 'Content-Type: application/json' -d 
 | `question`   | Show options; blocks until chosen, replies `{"decision":"<option>"}`. |
 | `done`       | Mark the session finished.                                        |
 | `remove`     | Drop the session.                                                 |
+
+## Voice callouts
+
+Agent Isle can speak a short line when an agent finishes a turn or needs a decision —
+"Claude finished: fix auth bug", "Codex wants permission to edit middleware.ts" — so you
+can keep working in another window. Turn it on in **Settings → Voice**. Each agent gets a
+distinct, stable voice.
+
+Two tiers, both opt-in and off by default:
+
+- **On-device (default).** Uses macOS's built-in speech synthesizer and composes the line
+  locally. Free, offline, and nothing leaves your Mac.
+- **Bring your own key (optional).** For higher-quality voices or AI-written summaries, add
+  your own provider key:
+
+  | Purpose | Providers | Key |
+  |---------|-----------|-----|
+  | Voice   | OpenAI, ElevenLabs   | your OpenAI / ElevenLabs API key |
+  | Summary | OpenAI, Anthropic    | your OpenAI / Anthropic API key  |
+
+  You're billed by that provider directly — Agent Isle runs no backend and takes no cut.
+  Keys are stored in the **macOS Keychain** (never in plists or diagnostic exports). Only
+  the short line to be spoken is sent, and only to the provider you selected. If a request
+  fails, Agent Isle falls back to the on-device voice so you still hear the callout.
+
+Voice callouts respect the same **quiet scenes** (Focus, screen-lock, screen-sharing) as
+sounds and notifications.
 
 ## Architecture
 
