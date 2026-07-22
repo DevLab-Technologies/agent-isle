@@ -562,7 +562,9 @@ struct AboutSettings: View {
     private let repoURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle")!
     private let issuesURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle/issues")!
     @State private var reportingProblem = false
-    @State private var channel = Updater.shared.channel
+    // Loaded in .onAppear, not here: a @State default initializer is non-isolated, so it
+    // can't read the @MainActor `Updater.shared.channel` (a hard error on Swift 5.10).
+    @State private var channel: UpdateChannel = .stable
 
     var body: some View {
         SettingsScaffold(section: .about) {
@@ -589,6 +591,7 @@ struct AboutSettings: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(width: 220)
+                    .onAppear { channel = Updater.shared.channel }
                     .onChange(of: channel) { _, newValue in Updater.shared.channel = newValue }
                 }
                 SettingsRow(title: "Install Updates Automatically",
