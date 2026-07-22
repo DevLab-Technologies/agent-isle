@@ -76,47 +76,45 @@ struct GeneralSettings: View {
 // MARK: - Integrations
 
 struct IntegrationsSettings: View {
-    @State private var claudeInstalled = HookInstaller.isInstalled()
-    @State private var cursorInstalled = CursorHookInstaller.isInstalled()
-    private let hasClaude = HookInstaller.hasClaudeCode()
-    private let hasCursor = CursorHookInstaller.hasCursor()
+    @EnvironmentObject var settings: AppSettings
 
-    // Agents discovered from their own history files (no hook required).
-    private let autoDetected: [AgentKind] = [.cursor, .grok, .copilot, .codex,
-                                             .opencode, .goose, .cline, .qwen, .aider]
+    @State private var reports: [IntegrationDoctor.Report] = []
+    @State private var serverReachable = false
+    @State private var setupSummary: String?
+
+    private var hookCapable: [CLIIntegration] { CLIIntegration.hookCapable }
+    private var monitorOnly: [CLIIntegration] {
+        CLIIntegration.all.filter { $0.hook == nil }
+    }
 
     var body: some View {
         SettingsScaffold(section: .integrations) {
-            SettingsGroup(title: "CLI Hooks",
-                          footnote: "Hooks let a CLI push permission and completion events to the island in real time, so you can approve tool calls straight from the notch.") {
-                SettingsRow(title: "Claude Code",
-                            subtitle: hasClaude ? nil : "Claude Code not found in ~/.claude.") {
-                    if hasClaude {
+            hooksGroup
+            setupGroup
+            monitorGroup
+            doctorGroup
+        }
+        .onAppear(perform: recheck)
+    }
+
+    // MARK: Hooks
+
+    private var hooksGroup: some View {
+        SettingsGroup(title: "CLI Hooks",
+                      footnote: "Hooks let a CLI push permission and completion events to the island in real time, so you can approve tool calls straight from the notch.") {
+            ForEach(Array(hookCapable.enumerated()), id: \.element.id) { idx, integration in
+                let installed = integration.hook?.isInstalled() ?? false
+                SettingsRow(title: integration.displayName,
+                            subtitle: integration.hasCLI() ? nil : "Not found in \(integration.configDir.path).",
+                            showsDivider: idx < hookCapable.count - 1) {
+                    if integration.hasCLI() {
                         HStack(spacing: 8) {
-                            StatusText(active: claudeInstalled)
+                            StatusText(active: installed)
                             Toggle("", isOn: Binding(
-                                get: { claudeInstalled },
+                                get: { installed },
                                 set: { on in
-                                    _ = on ? HookInstaller.install() : HookInstaller.uninstall()
-                                    claudeInstalled = HookInstaller.isInstalled()
-                                }))
-                                .labelsHidden().toggleStyle(.switch)
-                        }
-                    } else {
-                        Text("Not installed").font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
-                }
-                SettingsRow(title: "Cursor",
-                            subtitle: hasCursor ? nil : "Cursor not found in ~/.cursor.",
-                            showsDivider: false) {
-                    if hasCursor {
-                        HStack(spacing: 8) {
-                            StatusText(active: cursorInstalled)
-                            Toggle("", isOn: Binding(
-                                get: { cursorInstalled },
-                                set: { on in
-                                    _ = on ? CursorHookInstaller.install() : CursorHookInstaller.uninstall()
-                                    cursorInstalled = CursorHookInstaller.isInstalled()
+                                    _ = on ? integration.hook?.install() : integration.hook?.uninstall()
+                                    recheck()
                                 }))
                                 .labelsHidden().toggleStyle(.switch)
                         }
@@ -125,21 +123,88 @@ struct IntegrationsSettings: View {
                     }
                 }
             }
+        }
+    }
 
-            SettingsGroup(title: "Auto-detected agents",
-                          footnote: "These are discovered from their own history files — no hook needed. They appear automatically when active.") {
-                ForEach(Array(autoDetected.enumerated()), id: \.offset) { idx, agent in
-                    SettingsRow(title: agent.displayName,
-                                showsDivider: idx < autoDetected.count - 1) {
+    // MARK: Zero-config setup
+
+    private var setupGroup: some View {
+        SettingsGroup(title: "Setup",
+                      footnote: setupSummary ?? "Detect every installed CLI and install its hook in one step.") {
+            SettingsRow(title: "Set up integrations",
+                        subtitle: "Scan for supported CLIs and configure any that aren't set up yet.") {
+                Button("Re-scan", action: runSetup)
+            }
+            SettingsRow(title: "Automatic setup",
+                        subtitle: "Configure detected CLIs on first launch and offer to finish any that are missing.",
+                        showsDivider: false) {
+                Toggle("", isOn: $settings.autoSetupIntegrations).labelsHidden().toggleStyle(.switch)
+            }
+        }
+    }
+
+    // MARK: Monitor-only agents
+
+    @ViewBuilder private var monitorGroup: some View {
+        let detected = monitorOnly.filter { $0.hasCLI() }
+        if !detected.isEmpty {
+            SettingsGroup(title: "Monitored agents",
+                          footnote: "These CLIs have no hook mechanism, so Agent Isle reads their activity from history. They appear automatically when active.") {
+                ForEach(Array(detected.enumerated()), id: \.element.id) { idx, integration in
+                    SettingsRow(title: integration.displayName,
+                                showsDivider: idx < detected.count - 1) {
                         HStack(spacing: 6) {
-                            AgentBadge(agent: agent, size: 20)
-                            Text(ChatHistory.isSupported(agent) ? "Live chat" : "Monitor only")
+                            AgentBadge(agent: integration.agent, size: 20)
+                            Text(integration.monitorLabel)
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                     }
                 }
             }
         }
+    }
+
+    // MARK: Doctor
+
+    private var doctorGroup: some View {
+        SettingsGroup(title: "Integration Doctor",
+                      footnote: "Checks each integration end-to-end: CLI present, hook installed and pointing at the right port, event server reachable, and history readable.") {
+            SettingsRow(title: "Event server",
+                        subtitle: "Listening on localhost:\(EventServer.port) for CLI events.",
+                        showsDivider: !reports.isEmpty) {
+                HStack(spacing: 8) {
+                    DoctorBadge(status: serverReachable ? .ok : .fail)
+                    Button("Re-check", action: recheck)
+                }
+            }
+            ForEach(Array(reports.enumerated()), id: \.element.id) { idx, report in
+                DoctorRow(report: report,
+                          showsDivider: idx < reports.count - 1,
+                          onFix: { fix(report.agent) })
+            }
+        }
+    }
+
+    // MARK: Actions
+
+    private func recheck() {
+        serverReachable = IntegrationDoctor.serverReachable()
+        reports = IntegrationDoctor.run()
+    }
+
+    private func runSetup() {
+        let pending = hookCapable.filter { $0.hasCLI() && !($0.hook?.isInstalled() ?? true) }
+        let installed = pending.filter { $0.hook?.install() ?? false }
+        setupSummary = installed.isEmpty
+            ? (hookCapable.contains { $0.hasCLI() } ? "All detected CLIs are already set up."
+                                                    : "No supported CLIs detected yet.")
+            : "Configured \(installed.map(\.displayName).joined(separator: ", ")). Restart those sessions to apply."
+        recheck()
+    }
+
+    private func fix(_ agent: AgentKind) {
+        _ = IntegrationDoctor.fix(agent)
+        recheck()
     }
 }
 
@@ -152,6 +217,80 @@ private struct StatusText: View {
             Text(active ? "Active" : "Off").foregroundStyle(active ? .green : .secondary)
         }
         .font(.system(size: 12, weight: .medium))
+    }
+}
+
+/// A colored SF-Symbol dot for a doctor status.
+private struct DoctorBadge: View {
+    let status: IntegrationDoctor.Status
+    var body: some View {
+        Image(systemName: symbol).foregroundStyle(color).font(.system(size: 13, weight: .medium))
+    }
+    private var symbol: String {
+        switch status {
+        case .ok: return "checkmark.circle.fill"
+        case .warn: return "exclamationmark.triangle.fill"
+        case .fail: return "xmark.circle.fill"
+        case .info: return "info.circle"
+        }
+    }
+    private var color: Color {
+        switch status {
+        case .ok: return .green
+        case .warn: return .orange
+        case .fail: return Palette.deny
+        case .info: return .secondary
+        }
+    }
+}
+
+/// One integration's expandable health summary with an optional one-click Fix.
+private struct DoctorRow: View {
+    let report: IntegrationDoctor.Report
+    var showsDivider: Bool = true
+    let onFix: () -> Void
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                        Text(report.displayName).font(.system(size: 13))
+                    }
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 8)
+                if report.fixable {
+                    Button("Fix", action: onFix)
+                }
+                DoctorBadge(status: report.overall)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(report.checks) { check in
+                        HStack(alignment: .top, spacing: 8) {
+                            DoctorBadge(status: check.status)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(check.title).font(.system(size: 12, weight: .medium))
+                                Text(check.detail).font(.system(size: 11)).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(.horizontal, 14).padding(.bottom, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if showsDivider { Divider().padding(.leading, 14) }
+        }
     }
 }
 

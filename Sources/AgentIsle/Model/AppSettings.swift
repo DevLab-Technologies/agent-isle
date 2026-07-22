@@ -107,6 +107,18 @@ final class AppSettings: ObservableObject {
         didSet { d.set(smartSuppression, forKey: Key.smartSuppression) }
     }
 
+    // MARK: Integrations
+    /// Opt-out for zero-config setup: when true, Agent Isle auto-installs hooks for detected
+    /// CLIs on first launch and offers to finish any that are missing afterward.
+    @Published var autoSetupIntegrations: Bool {
+        didSet { d.set(autoSetupIntegrations, forKey: Key.autoSetupIntegrations) }
+    }
+    /// Set once the first-launch auto-install has run, so it only happens on a fresh install.
+    var integrationSetupDone: Bool {
+        get { d.bool(forKey: Key.integrationSetupDone) }
+        set { d.set(newValue, forKey: Key.integrationSetupDone) }
+    }
+
     // MARK: Session card
     @Published var showTokens: Bool { didSet { d.set(showTokens, forKey: Key.showTokens) } }
     @Published var showTerminal: Bool { didSet { d.set(showTerminal, forKey: Key.showTerminal) } }
@@ -151,6 +163,8 @@ final class AppSettings: ObservableObject {
         static let hideInFullscreen = "hideInFullscreen"
         static let autoExpandOnAttention = "autoExpandOnAttention"
         static let smartSuppression = "smartSuppression"
+        static let autoSetupIntegrations = "autoSetupIntegrations"
+        static let integrationSetupDone = "integrationSetupDone"
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
         static let showTasks = "showTasks"
@@ -178,6 +192,7 @@ final class AppSettings: ObservableObject {
             Key.hideInFullscreen: true,
             Key.autoExpandOnAttention: true,
             Key.smartSuppression: true,
+            Key.autoSetupIntegrations: true,
             Key.showTokens: true,
             Key.showTerminal: true,
             Key.showTasks: true,
@@ -202,6 +217,7 @@ final class AppSettings: ObservableObject {
         hideInFullscreen = d.bool(forKey: Key.hideInFullscreen)
         autoExpandOnAttention = d.bool(forKey: Key.autoExpandOnAttention)
         smartSuppression = d.bool(forKey: Key.smartSuppression)
+        autoSetupIntegrations = d.bool(forKey: Key.autoSetupIntegrations)
         showTokens = d.bool(forKey: Key.showTokens)
         showTerminal = d.bool(forKey: Key.showTerminal)
         showTasks = d.bool(forKey: Key.showTasks)

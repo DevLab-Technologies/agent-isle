@@ -11,8 +11,10 @@ Claude Code in the hook output format, so you can approve tools right from the n
 The AskUserQuestion tool is a special case: it's shown as a question card and the chosen
 answer is fed back to Claude, so multiple-choice questions can be answered from the notch.
 
-Usage:  agent-isle-hook.py <event-kind>
+Usage:  agent-isle-hook.py <event-kind> [--agent <name>]
         event-kind in: pretooluse | posttooluse | notification | stop | userprompt
+        --agent tags the session's agent (default "claude"); any CLI whose hook payload
+        matches Claude Code's shape can reuse this bridge by passing its own name.
 """
 import json
 import os
@@ -198,8 +200,28 @@ def detect_terminal():
     return (tp or "Terminal"), None
 
 
+def parse_args(argv):
+    """First positional arg is the event kind; `--agent <name>` optionally overrides the
+    agent tag. Kept dependency-free (no argparse) to stay a fast, importless hook."""
+    kind = "notification"
+    agent = "claude"
+    positional = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--agent" and i + 1 < len(argv):
+            agent = argv[i + 1]
+            i += 2
+            continue
+        positional.append(a)
+        i += 1
+    if positional:
+        kind = positional[0]
+    return kind, agent
+
+
 def main():
-    kind = sys.argv[1] if len(sys.argv) > 1 else "notification"
+    kind, agent = parse_args(sys.argv[1:])
     raw = sys.stdin.read()
     try:
         hook = json.loads(raw)
@@ -219,7 +241,7 @@ def main():
     term_label, term_bundle = detect_terminal()
     base = {
         "session": session,
-        "agent": "claude",
+        "agent": agent,
         "title": title,
         "terminal": term_label,
         "term_bundle": term_bundle,
