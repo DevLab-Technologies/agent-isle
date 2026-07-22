@@ -43,6 +43,34 @@ enum TranscriptReader {
         return nil
     }
 
+    /// The first JSON object of a JSONL file — used for agents that put session metadata
+    /// (cwd, description, …) on the opening line. Best-effort: nil when absent/unparseable.
+    static func firstJSON(in url: URL, maxBytes: Int = 64 * 1024) -> [String: Any]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maxBytes) else { return nil }
+        let text = String(decoding: data, as: UTF8.self)
+        guard let first = text.split(separator: "\n", omittingEmptySubsequences: true).first,
+              let d = first.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+    }
+
+    /// Read a whole JSON file as an object, capped to bound memory. Best-effort.
+    static func readJSONObject(_ url: URL, maxBytes: Int = 8 * 1024 * 1024) -> [String: Any]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maxBytes) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    /// Read a whole JSON file as an array of objects, capped to bound memory. Best-effort.
+    static func readJSONArray(_ url: URL, maxBytes: Int = 8 * 1024 * 1024) -> [[String: Any]]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maxBytes) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+    }
+
     // MARK: - Sub-agents
 
     /// The expensive-to-read bits of a sub-agent transcript, cached across polls: the

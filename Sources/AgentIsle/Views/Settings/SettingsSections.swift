@@ -61,7 +61,8 @@ struct IntegrationsSettings: View {
     private let hasCursor = CursorHookInstaller.hasCursor()
 
     // Agents discovered from their own history files (no hook required).
-    private let autoDetected: [AgentKind] = [.cursor, .grok, .copilot]
+    private let autoDetected: [AgentKind] = [.cursor, .grok, .copilot, .codex,
+                                             .opencode, .goose, .cline, .qwen, .aider]
 
     var body: some View {
         SettingsScaffold(section: .integrations) {

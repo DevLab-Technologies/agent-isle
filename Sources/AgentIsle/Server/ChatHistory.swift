@@ -14,6 +14,8 @@ enum ChatHistory {
         case .grok:    return grok(url, limit: limit)
         case .copilot: return copilot(url, limit: limit)
         case .cursor:  return CursorStore.messages(at: url, limit: limit)
+        case .codex:   return codex(url, limit: limit)
+        case .goose:   return goose(url, limit: limit)
         default:       return TranscriptReader.messages(in: url, limit: limit)
         }
     }
@@ -22,7 +24,7 @@ enum ChatHistory {
     /// unsupported agent (or with no file yet) show the "no history" notice instead.
     static func isSupported(_ agent: AgentKind) -> Bool {
         switch agent {
-        case .claude, .grok, .copilot, .cursor: return true
+        case .claude, .grok, .copilot, .cursor, .codex, .goose: return true
         default: return false
         }
     }
@@ -155,5 +157,98 @@ enum ChatHistory {
             }
         }
         return out.count > limit ? Array(out.suffix(limit)) : out
+    }
+
+    // MARK: - Codex CLI  (rollout-*.jsonl)
+
+    /// Codex writes a JSONL rollout: a `session_meta` header line, then `response_item`
+    /// entries wrapping messages (`content` blocks of `input_text`/`output_text`) and tool
+    /// calls. Older builds emit bare `{type:"message",role,content}` lines. Both are handled.
+    private static func codex(_ url: URL, limit: Int) -> [ChatMessage] {
+        let lines = TranscriptReader.tailLines(of: url, maxBytes: maxBytes)
+        var out: [ChatMessage] = []
+        for (idx, raw) in lines.enumerated() {
+            guard let d = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            let node = (obj["payload"] as? [String: Any]) ?? obj
+            let id = "codex-\(idx)"
+
+            // Tool call entries surface as a one-line tool-use block.
+            if let type = node["type"] as? String,
+               type == "function_call" || type == "local_shell_call" || type == "custom_tool_call" {
+                let name = (node["name"] as? String) ?? "Tool"
+                out.append(ChatMessage(id: id, role: .assistant,
+                                       blocks: [.toolUse(name: name,
+                                                         detail: TranscriptReader.toolDetail(fromArgumentsJSON: node["arguments"]))]))
+                continue
+            }
+
+            guard let role = node["role"] as? String, role == "user" || role == "assistant" else { continue }
+            guard let text = codexText(node["content"]) else { continue }
+            out.append(ChatMessage(id: id,
+                                   role: role == "user" ? .user : .assistant,
+                                   blocks: [.text(TranscriptReader.clamp(text, 4000))]))
+        }
+        return out.count > limit ? Array(out.suffix(limit)) : out
+    }
+
+    /// Codex content is a plain string or an array of `{type, text}` blocks.
+    private static func codexText(_ content: Any?) -> String? {
+        if let s = content as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        if let blocks = content as? [[String: Any]] {
+            let parts = blocks.compactMap { $0["text"] as? String }
+            let joined = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            return joined.isEmpty ? nil : joined
+        }
+        return nil
+    }
+
+    // MARK: - Goose  (session *.jsonl)
+
+    /// Goose writes a JSONL session: a metadata header line followed by `{role, content}`
+    /// messages whose content is an array of blocks (`text`, plus tool request/response
+    /// blocks). We surface text and tool requests; the leading metadata line is skipped.
+    private static func goose(_ url: URL, limit: Int) -> [ChatMessage] {
+        let lines = TranscriptReader.tailLines(of: url, maxBytes: maxBytes)
+        var out: [ChatMessage] = []
+        for (idx, raw) in lines.enumerated() {
+            guard let d = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let role = obj["role"] as? String, role == "user" || role == "assistant" else { continue }
+            let id = "goose-\(idx)"
+            var blocks: [ChatBlock] = []
+            if let text = gooseText(obj["content"]) {
+                blocks.append(.text(TranscriptReader.clamp(text, 4000)))
+            }
+            for b in obj["content"] as? [[String: Any]] ?? [] {
+                if (b["type"] as? String) == "toolRequest",
+                   let call = b["toolCall"] as? [String: Any],
+                   let value = call["value"] as? [String: Any],
+                   let name = value["name"] as? String {
+                    blocks.append(.toolUse(name: name, detail: nil))
+                }
+            }
+            if !blocks.isEmpty {
+                out.append(ChatMessage(id: id, role: role == "user" ? .user : .assistant, blocks: blocks))
+            }
+        }
+        return out.count > limit ? Array(out.suffix(limit)) : out
+    }
+
+    /// Goose message content is an array of blocks; join the `text` ones.
+    private static func gooseText(_ content: Any?) -> String? {
+        if let s = content as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        if let blocks = content as? [[String: Any]] {
+            let parts = blocks.compactMap { ($0["type"] as? String) == "text" ? $0["text"] as? String : nil }
+            let joined = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            return joined.isEmpty ? nil : joined
+        }
+        return nil
     }
 }
