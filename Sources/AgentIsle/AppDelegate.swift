@@ -376,7 +376,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let controller = NSHostingController(rootView: root)
         controller.sizingOptions = [.preferredContentSize]   // popover tracks SwiftUI size
         let popover = NSPopover()
-        popover.behavior = .transient   // closes when clicking outside
+        // Semitransient (not transient): a transient popover dismisses itself the moment
+        // the in-panel gear opens its menu (the menu takes key focus), making those actions
+        // unusable. Semitransient keeps the panel up while interacting with the app's own
+        // menus/controls, and it still closes when the user clicks another app.
+        popover.behavior = .semitransient
         popover.animates = true
         popover.contentViewController = controller
         panelPopover = popover
