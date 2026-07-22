@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Carbon.HIToolbox
+import Combine
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -28,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// demo/marketing capture forces it on, settings-capture suppresses it.
     private var forceNotchWindow = false
     private var suppressNotchWindow = false
+    /// Re-evaluates notch visibility when the visible-session set changes (for "Auto-hide
+    /// When Empty"). Only re-applies on the empty ⇄ non-empty transition, not every update.
+    private var sessionsCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -74,6 +78,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Re-evaluate notch visibility when the "Hide in Fullscreen" preference changes.
         NotificationCenter.default.addObserver(
             forName: .agentIsleFullscreenPreferenceChanged, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.applyDisplayMode() }
+            }
+        // Re-evaluate notch visibility when a visibility-affecting preference (e.g. "Auto-hide
+        // When Empty") changes, so it takes effect immediately.
+        NotificationCenter.default.addObserver(
+            forName: .agentIsleNotchVisibilityChanged, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.applyDisplayMode() }
+            }
+        // Show/hide the notch as sessions come and go, for "Auto-hide When Empty". Only the
+        // empty ⇄ non-empty transition matters, so collapse the stream to that boolean.
+        // `$sessions` emits the new array (in willSet), so derive emptiness from it directly
+        // rather than reading the store's still-stale `visibleSessions`.
+        sessionsCancellable = store.$sessions
+            .map { sessions in
+                MainActor.assumeIsolated { sessions.allSatisfy { AppSettings.shared.isHidden($0) } }
+            }
+            .removeDuplicates()
+            .sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.applyDisplayMode() }
             }
         // Track fullscreen so the notch island hides while it's occluded (respecting the
@@ -520,6 +542,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if forceNotchWindow { return true }
         guard AppSettings.shared.displayMode.showsNotch else { return false }
         if AppSettings.shared.hideInFullscreen && FullscreenMonitor.isFrontmostWindowFullscreen() {
+            return false
+        }
+        if AppSettings.shared.autoHideWhenEmpty && store.visibleSessions.isEmpty {
             return false
         }
         return true

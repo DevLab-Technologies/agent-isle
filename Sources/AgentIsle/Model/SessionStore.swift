@@ -23,7 +23,14 @@ final class SessionStore: ObservableObject {
     /// mouse-exit tracking is unreliable at the top screen edge and would leave the
     /// island stuck open.
     @Published private(set) var isHovering: Bool = false
+    /// Whether hover should currently expand the panel. Distinct from `isHovering` (the raw
+    /// pointer state that drives the exit poll): it layers the user's hover-expand delay and
+    /// auto-collapse dwell on top, so the panel doesn't pop the instant the pointer grazes
+    /// the notch and can linger briefly after the pointer leaves. Views read this, not
+    /// `isHovering`, to decide whether hover has opened the island.
+    @Published private(set) var hoverExpanded: Bool = false
     private var hoverCollapseWork: DispatchWorkItem?
+    private var hoverExpandedWork: DispatchWorkItem?
 
     /// Current rendered size of the island, reported by SwiftUI so the window can
     /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.
@@ -118,16 +125,38 @@ final class SessionStore: ObservableObject {
         if inside {
             hoverCollapseWork?.cancel()
             hoverCollapseWork = nil
-            if !isHovering { isHovering = true }
+            if !isHovering {
+                isHovering = true
+                // Expand after the configured dwell (0 = immediate, the prior behavior).
+                scheduleHoverExpanded(true, after: AppSettings.shared.hoverExpandDelay)
+            }
         } else {
             guard isHovering, hoverCollapseWork == nil else { return }
             let work = DispatchWorkItem { [weak self] in
-                self?.hoverCollapseWork = nil
-                self?.isHovering = false
+                guard let self else { return }
+                self.hoverCollapseWork = nil
+                self.isHovering = false
+                // Linger the configured dwell before actually collapsing (0 = immediate).
+                self.scheduleHoverExpanded(false, after: AppSettings.shared.autoCollapseDelay)
             }
             hoverCollapseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
         }
+    }
+
+    /// Transition `hoverExpanded` to `value` after `delay` seconds, cancelling any pending
+    /// transition so a re-entry during the collapse dwell (or an exit during the expand
+    /// delay) wins. A zero delay applies on the next runloop tick.
+    private func scheduleHoverExpanded(_ value: Bool, after delay: TimeInterval) {
+        hoverExpandedWork?.cancel()
+        hoverExpandedWork = nil
+        guard hoverExpanded != value else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.hoverExpandedWork = nil
+            self?.hoverExpanded = value
+        }
+        hoverExpandedWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay), execute: work)
     }
 
     // MARK: - Attention auto-expand

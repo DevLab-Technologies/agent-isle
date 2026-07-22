@@ -33,6 +33,21 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     var showsMenuBar: Bool { self == .menuBar || self == .both }
 }
 
+/// How much the resting (collapsed) pill shows. `detailed` is the current, richer look
+/// (status dot, agent glyph, live pulse, sub-agent badge); `clean` strips it back to the
+/// focus session's title and the session count.
+enum CollapsedStyle: String, CaseIterable, Identifiable {
+    case clean, detailed
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .clean:    return "Clean"
+        case .detailed: return "Detailed"
+        }
+    }
+}
+
 /// User preferences, persisted to `UserDefaults` and observed by the views and the
 /// runtime pieces that react to them (sound, notch geometry, hover-expand, card layout).
 ///
@@ -97,7 +112,35 @@ final class AppSettings: ObservableObject {
     }
 
     // MARK: Behavior
+    /// Master switch for hover-driven expand/collapse. When off, the island only expands
+    /// on an explicit click (or auto-expand on attention).
     @Published var expandOnHover: Bool { didSet { d.set(expandOnHover, forKey: Key.expandOnHover) } }
+
+    /// Seconds the pointer must dwell over the collapsed pill before it expands (0…1).
+    /// 0 keeps the current instant expand; a small delay stops the panel popping open when
+    /// the pointer just grazes the notch on its way past.
+    @Published var hoverExpandDelay: Double { didSet { d.set(hoverExpandDelay, forKey: Key.hoverExpandDelay) } }
+
+    /// Seconds the expanded panel lingers after the pointer leaves before it auto-collapses
+    /// (0…5), added on top of the small flicker-guard debounce. 0 preserves the current
+    /// near-instant collapse.
+    @Published var autoCollapseDelay: Double { didSet { d.set(autoCollapseDelay, forKey: Key.autoCollapseDelay) } }
+
+    /// When on, hide the notch island entirely while no session is visible, and show it
+    /// again as soon as one appears. Only affects the notch surface; folded into the app's
+    /// notch-visibility decision alongside the display mode and fullscreen overrides.
+    @Published var autoHideWhenEmpty: Bool {
+        didSet { d.set(autoHideWhenEmpty, forKey: Key.autoHideWhenEmpty); postNotchVisibilityChange() }
+    }
+
+    /// When on (default), tapping a session card opens its live conversation. When off, the
+    /// cards are inert so a stray click never pulls focus or opens anything.
+    @Published var clickToJump: Bool { didSet { d.set(clickToJump, forKey: Key.clickToJump) } }
+
+    /// How much the resting pill shows — see `CollapsedStyle`.
+    @Published var collapsedStyle: CollapsedStyle {
+        didSet { d.set(collapsedStyle.rawValue, forKey: Key.collapsedStyle) }
+    }
 
     /// Hide the notch island while a frontmost window is in fullscreen (the notch is
     /// occluded there anyway). Only affects the notch surface; the menu-bar panel is
@@ -183,6 +226,11 @@ final class AppSettings: ObservableObject {
         static let sessionFilters = "sessionFilters"
         static let hideProbeWorkers = "hideProbeWorkers"
         static let expandOnHover = "expandOnHover"
+        static let hoverExpandDelay = "hoverExpandDelay"
+        static let autoCollapseDelay = "autoCollapseDelay"
+        static let autoHideWhenEmpty = "autoHideWhenEmpty"
+        static let clickToJump = "clickToJump"
+        static let collapsedStyle = "collapsedStyle"
         static let hideInFullscreen = "hideInFullscreen"
         static let autoExpandOnAttention = "autoExpandOnAttention"
         static let smartSuppression = "smartSuppression"
@@ -213,6 +261,11 @@ final class AppSettings: ObservableObject {
             Key.quietWhenScreenSharing: true,
             Key.hideProbeWorkers: true,
             Key.expandOnHover: true,
+            Key.hoverExpandDelay: 0.0,
+            Key.autoCollapseDelay: 0.0,
+            Key.autoHideWhenEmpty: false,
+            Key.clickToJump: true,
+            Key.collapsedStyle: CollapsedStyle.detailed.rawValue,
             Key.hideInFullscreen: true,
             Key.autoExpandOnAttention: true,
             Key.smartSuppression: true,
@@ -241,6 +294,11 @@ final class AppSettings: ObservableObject {
         sessionFilters = AppSettings.loadFilters(from: d)
         jumpRules = JumpRule.load(from: d)
         expandOnHover = d.bool(forKey: Key.expandOnHover)
+        hoverExpandDelay = d.double(forKey: Key.hoverExpandDelay)
+        autoCollapseDelay = d.double(forKey: Key.autoCollapseDelay)
+        autoHideWhenEmpty = d.bool(forKey: Key.autoHideWhenEmpty)
+        clickToJump = d.bool(forKey: Key.clickToJump)
+        collapsedStyle = CollapsedStyle(rawValue: d.string(forKey: Key.collapsedStyle) ?? "") ?? .detailed
         hideInFullscreen = d.bool(forKey: Key.hideInFullscreen)
         autoExpandOnAttention = d.bool(forKey: Key.autoExpandOnAttention)
         smartSuppression = d.bool(forKey: Key.smartSuppression)
@@ -281,6 +339,10 @@ final class AppSettings: ObservableObject {
 
     private func postFullscreenChange() {
         NotificationCenter.default.post(name: .agentIsleFullscreenPreferenceChanged, object: nil)
+    }
+
+    private func postNotchVisibilityChange() {
+        NotificationCenter.default.post(name: .agentIsleNotchVisibilityChanged, object: nil)
     }
 
     // MARK: - Muting (sound + notifications)
@@ -362,6 +424,9 @@ extension Notification.Name {
     /// Posted when the user toggles "Hide in Fullscreen"; the app re-evaluates whether the
     /// notch window should currently be visible.
     static let agentIsleFullscreenPreferenceChanged = Notification.Name("AgentIsleFullscreenPreferenceChanged")
+    /// Posted when a preference that affects notch-window visibility (e.g. "Auto-hide When
+    /// Empty") changes; the app re-evaluates whether the notch window should be visible.
+    static let agentIsleNotchVisibilityChanged = Notification.Name("AgentIsleNotchVisibilityChanged")
 }
 
 /// Thin wrapper over `SMAppService` for the "Launch at Login" toggle. In a packaged

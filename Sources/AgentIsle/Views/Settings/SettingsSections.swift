@@ -306,8 +306,7 @@ struct DisplaySettings: View {
             SettingsGroup(title: "Surface",
                           footnote: "Notch shows the island over the notch (or a centered pill). Menu Bar opens the full session panel from the menu-bar icon — best for Macs without a notch or on external displays. Both shows the island and the menu-bar panel together.") {
                 SettingsRow(title: "Display Mode",
-                            subtitle: "Where Agent Isle shows your sessions.",
-                            showsDivider: false) {
+                            subtitle: "Where Agent Isle shows your sessions.") {
                     Picker("", selection: $settings.displayMode) {
                         ForEach(DisplayMode.allCases) { mode in
                             Text(mode.title).tag(mode)
@@ -317,14 +316,48 @@ struct DisplaySettings: View {
                     .pickerStyle(.menu)
                     .frame(width: 180)
                 }
+                SettingsRow(title: "Collapsed Style",
+                            subtitle: "Detailed shows status, agent, and live activity; Clean shows just the focused title and count.",
+                            showsDivider: false) {
+                    Picker("", selection: $settings.collapsedStyle) {
+                        ForEach(CollapsedStyle.allCases) { style in
+                            Text(style.title).tag(style)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 180)
+                }
             }
 
             SettingsGroup(title: "Behavior",
-                          footnote: "Fullscreen hiding affects only the notch island. Smart suppression still plays the sound cue and posts the notification — it only skips popping the panel open.") {
+                          footnote: "Fullscreen hiding and auto-hide affect only the notch island. Smart suppression still plays the sound cue and posts the notification — it only skips popping the panel open.") {
                 SettingsRow(title: "Hide in Fullscreen",
                             subtitle: "Hide the notch island while a fullscreen window is frontmost.") {
                     Toggle("", isOn: $settings.hideInFullscreen).labelsHidden().toggleStyle(.switch)
                 }
+                SettingsRow(title: "Auto-hide When Empty",
+                            subtitle: "Hide the notch island when no session is active, and show it again when one appears.") {
+                    Toggle("", isOn: $settings.autoHideWhenEmpty).labelsHidden().toggleStyle(.switch)
+                }
+                SettingsRow(title: "Click to Open Session",
+                            subtitle: "Tap a session card to open its live conversation. Turn off to make cards non-interactive.") {
+                    Toggle("", isOn: $settings.clickToJump).labelsHidden().toggleStyle(.switch)
+                }
+                SettingsRow(title: "Expand on Hover",
+                            subtitle: "Expand the island while the pointer rests over it.") {
+                    Toggle("", isOn: $settings.expandOnHover).labelsHidden().toggleStyle(.switch)
+                }
+                SliderRow(title: "Hover-expand Delay",
+                          subtitle: "How long the pointer must rest before the island expands.",
+                          value: $settings.hoverExpandDelay,
+                          range: 0...1.0, step: 0.05, unit: "s", decimals: 2,
+                          disabled: !settings.expandOnHover)
+                SliderRow(title: "Auto-collapse Delay",
+                          subtitle: "How long the island lingers after the pointer leaves before collapsing.",
+                          value: $settings.autoCollapseDelay,
+                          range: 0...5, step: 0.1, unit: "s", decimals: 1,
+                          disabled: !settings.expandOnHover)
                 SettingsRow(title: "Auto-expand on Attention",
                             subtitle: "Open the panel automatically when a session needs a permission or asks a question.") {
                     Toggle("", isOn: $settings.autoExpandOnAttention).labelsHidden().toggleStyle(.switch)
@@ -390,17 +423,26 @@ struct DisplaySettings: View {
 /// A labeled slider row with a live value readout.
 private struct SliderRow: View {
     let title: String
+    var subtitle: String? = nil
     @Binding var value: Double
     let range: ClosedRange<Double>
     var step: Double = 1
     var unit: String = ""
+    /// Decimal places in the readout; 0 renders an integer (e.g. "480pt"), 1 a tenth
+    /// (e.g. "0.5s") for the sub-second timing sliders.
+    var decimals: Int = 0
+    var disabled: Bool = false
     var showsDivider: Bool = true
 
+    private var readout: String {
+        decimals > 0 ? String(format: "%.\(decimals)f\(unit)", value) : "\(Int(value))\(unit)"
+    }
+
     var body: some View {
-        SettingsRow(title: title, showsDivider: showsDivider) {
+        SettingsRow(title: title, subtitle: subtitle, showsDivider: showsDivider) {
             HStack(spacing: 10) {
-                Slider(value: $value, in: range, step: step).frame(width: 220)
-                Text("\(Int(value))\(unit)")
+                Slider(value: $value, in: range, step: step).frame(width: 220).disabled(disabled)
+                Text(readout)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(width: 42, alignment: .trailing)

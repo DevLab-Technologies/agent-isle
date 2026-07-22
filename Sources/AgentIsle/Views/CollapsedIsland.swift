@@ -53,13 +53,19 @@ struct CollapsedIsland: View {
         .fixedSize()
     }
 
+    /// Clean mode strips the pill back to the focus session's title and the count; detailed
+    /// mode keeps the status dot, agent glyph, live pulse, and sub-agent badge.
+    private var isClean: Bool { settings.collapsedStyle == .clean }
+
     @ViewBuilder private var leftCluster: some View {
         if let s = focus {
             HStack(spacing: Theme.Space.sm) {
-                StatusDot(status: s.status)
-                Text(s.agent.glyph)
-                    .font(.system(size: 11))
-                    .foregroundStyle(s.agent.tint)
+                if !isClean {
+                    StatusDot(status: s.status)
+                    Text(s.agent.glyph)
+                        .font(.system(size: 11))
+                        .foregroundStyle(s.agent.tint)
+                }
                 Text(s.title)
                     .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(Theme.Ink.primary)
@@ -73,15 +79,18 @@ struct CollapsedIsland: View {
 
     // Right ear reads outward from the notch: the live signal first, then a muted total.
     // Only the most useful thing shows — no ambiguous "•••", and no lone "1".
+    // In clean mode only the count survives; the live signals belong to detailed mode.
     @ViewBuilder private var rightCluster: some View {
         HStack(spacing: Theme.Space.sm) {
-            if store.attentionCount > 0 {
-                CountBadge(count: store.attentionCount, color: attentionColor)
-            } else if store.workingCount > 0 {
-                LivePulse(color: SessionStatus.working.color)
+            if !isClean {
+                if store.attentionCount > 0 {
+                    CountBadge(count: store.attentionCount, color: attentionColor)
+                } else if store.workingCount > 0 {
+                    LivePulse(color: SessionStatus.working.color)
+                }
             }
             // How many sub-agents the surfaced session is running, right by the pulse.
-            if settings.showSubAgents, workingSubAgents > 0 {
+            if !isClean, settings.showSubAgents, workingSubAgents > 0 {
                 HStack(spacing: 3) {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
                         .font(.system(size: 8, weight: .semibold))
