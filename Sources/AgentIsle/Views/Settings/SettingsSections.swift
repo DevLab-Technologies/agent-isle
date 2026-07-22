@@ -140,6 +140,22 @@ struct DisplaySettings: View {
 
     var body: some View {
         SettingsScaffold(section: .display) {
+            SettingsGroup(title: "Surface",
+                          footnote: "Notch shows the island over the notch (or a centered pill). Menu Bar opens the full session panel from the menu-bar icon — best for Macs without a notch or on external displays. Both shows the island and the menu-bar panel together.") {
+                SettingsRow(title: "Display Mode",
+                            subtitle: "Where Agent Isle shows your sessions.",
+                            showsDivider: false) {
+                    Picker("", selection: $settings.displayMode) {
+                        ForEach(DisplayMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 180)
+                }
+            }
+
             SettingsGroup(title: "Session Card") {
                 SettingsRow(title: "Show Task List",
                             subtitle: "Render the agent's todo list with progress.") {

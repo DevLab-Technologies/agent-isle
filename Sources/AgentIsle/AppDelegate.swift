@@ -13,6 +13,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cursorHookMenuItem: NSMenuItem?
     private var autoUpdateMenuItem: NSMenuItem?
 
+    /// The menu-bar session panel (menu-bar / both modes). Built lazily on first open.
+    private var panelPopover: NSPopover?
+    /// The full dropdown menu used as the status item's click menu in notch-only mode.
+    private var fullMenu: NSMenu?
+    /// Launch overrides for notch-window visibility, independent of the display mode:
+    /// demo/marketing capture forces it on, settings-capture suppresses it.
+    private var forceNotchWindow = false
+    private var suppressNotchWindow = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
@@ -21,10 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         terminateOtherInstances()
 
         // Floating island over the notch. Suppressed in settings-capture mode so it
-        // doesn't float over the settings window during a screenshot.
+        // doesn't float over the settings window during a screenshot. Actual visibility is
+        // decided by `applyDisplayMode()` once the launch overrides below are known.
         let settingsCapture = ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] == "1"
+        suppressNotchWindow = settingsCapture
         let window = NotchWindow(store: store, settings: AppSettings.shared)
-        if !settingsCapture { window.orderFrontRegardless() }
         notchWindow = window
 
         setupStatusItem()
@@ -42,6 +52,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.addObserver(
             forName: .agentIsleGeometryChanged, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.scheduleGeometryRefresh() }
+            }
+        // Reconfigure surfaces whenever the display mode changes in Settings.
+        NotificationCenter.default.addObserver(
+            forName: .agentIsleDisplayModeChanged, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.applyDisplayMode() }
             }
 
         // Discover real sessions (local Claude Code + Grok/Copilot). No demo data by
@@ -64,10 +79,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             store.isExpanded = true
             // Sit above any other notch app (e.g. an installed build) for a clean capture.
             window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 2)
+            // Demo/marketing capture always wants the notch island visible.
+            forceNotchWindow = true
         } else {
             ideWatcher = IdeWatcher(store: store)
             ideWatcher?.start()
         }
+
+        // Now that the launch overrides are known, show the surfaces for the current mode.
+        applyDisplayMode()
 
         // Dev/marketing: auto-open the settings window for capture.
         if ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] == "1" {
@@ -214,6 +234,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 button.title = "🏝️"
             }
             button.toolTip = "Agent Isle"
+            // In menu-bar / both modes the button click opens the session panel popover
+            // (see `applyDisplayMode`). A right-click always shows a minimal safety menu.
+            // In notch-only mode a full dropdown menu is assigned to `item.menu`, which
+            // takes over the click and leaves this action unused.
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         let menu = NSMenu()
 
@@ -268,8 +295,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quit)
 
         menu.delegate = self
-        item.menu = menu
+        fullMenu = menu
         statusItem = item
+        // `applyDisplayMode()` (called from `applicationDidFinishLaunching`) decides whether
+        // this menu is assigned to the item (notch-only) or the popover click is used.
+    }
+
+    // MARK: - Display mode / menu-bar panel
+
+    /// Show the surfaces the current display mode calls for: the notch window and/or the
+    /// menu-bar status item behavior. Safe to call repeatedly (launch + on mode change).
+    private func applyDisplayMode() {
+        let mode = AppSettings.shared.displayMode
+
+        // Notch/pill window visibility. Launch overrides win: demo capture forces it on,
+        // settings capture suppresses it.
+        let showNotch = (mode.showsNotch || forceNotchWindow) && !suppressNotchWindow
+        if showNotch {
+            notchWindow?.orderFrontRegardless()
+        } else {
+            notchWindow?.orderOut(nil)
+        }
+
+        // Status-item behavior. With a menu assigned, a click opens that menu and the
+        // button action is ignored; with no menu, the click fires `statusItemClicked`.
+        guard let item = statusItem else { return }
+        if mode.showsMenuBar {
+            item.menu = nil
+        } else {
+            if panelPopover?.isShown == true { panelPopover?.performClose(nil) }
+            item.menu = fullMenu
+        }
+    }
+
+    /// Left-click opens the session panel; right-click shows the minimal safety menu.
+    @objc private func statusItemClicked() {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showMinimalMenu()
+        } else {
+            togglePanelPopover()
+        }
+    }
+
+    /// A minimal right-click menu so Settings and Quit are always reachable even when the
+    /// click opens the panel. Assigned transiently, then cleared so the click action stays.
+    private func showMinimalMenu() {
+        guard let item = statusItem, let button = item.button else { return }
+        let menu = NSMenu()
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit Agent Isle",
+                                action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        item.menu = menu
+        button.performClick(nil)
+        item.menu = nil
+    }
+
+    /// Toggle the session-panel popover anchored under the status item. It hosts the same
+    /// expanded island content (`MenuBarPanel` -> `ExpandedIsland`), sharing the live store.
+    private func togglePanelPopover() {
+        guard let button = statusItem?.button else { return }
+        let popover = ensurePanelPopover()
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        // Bring the accessory app forward so the panel's chat field can take keystrokes.
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    private func ensurePanelPopover() -> NSPopover {
+        if let popover = panelPopover { return popover }
+        let root = MenuBarPanel()
+            .environmentObject(store)
+            .environmentObject(AppSettings.shared)
+        let controller = NSHostingController(rootView: root)
+        controller.sizingOptions = [.preferredContentSize]   // popover tracks SwiftUI size
+        let popover = NSPopover()
+        // Semitransient (not transient): a transient popover dismisses itself the moment
+        // the in-panel gear opens its menu (the menu takes key focus), making those actions
+        // unusable. Semitransient keeps the panel up while interacting with the app's own
+        // menus/controls, and it still closes when the user clicks another app.
+        popover.behavior = .semitransient
+        popover.animates = true
+        popover.contentViewController = controller
+        panelPopover = popover
+        return popover
     }
 
     /// Refresh state-dependent titles whenever the menu is about to open.
