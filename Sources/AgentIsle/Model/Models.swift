@@ -18,6 +18,10 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
     case droid
     case kiro
     case amp
+    case aider
+    case cline
+    case goose
+    case qwen
     case unknown
 
     var id: String { rawValue }
@@ -34,6 +38,10 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
         case .droid: return "Droid"
         case .kiro: return "Kiro"
         case .amp: return "Amp"
+        case .aider: return "Aider"
+        case .cline: return "Cline"
+        case .goose: return "Goose"
+        case .qwen: return "Qwen"
         case .unknown: return "Agent"
         }
     }
@@ -51,6 +59,10 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
         case .droid: return Color(red: 0.55, green: 0.78, blue: 0.98)
         case .kiro: return Color(red: 0.80, green: 0.52, blue: 0.96)
         case .amp: return Color(red: 0.98, green: 0.45, blue: 0.55)
+        case .aider: return Color(red: 0.30, green: 0.72, blue: 0.66)  // teal
+        case .cline: return Color(red: 0.42, green: 0.46, blue: 0.92)  // indigo
+        case .goose: return Color(red: 0.66, green: 0.58, blue: 0.38)  // olive
+        case .qwen: return Color(red: 0.60, green: 0.40, blue: 0.85)   // violet
         case .unknown: return Color.gray
         }
     }
@@ -68,6 +80,10 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
         case .droid: return "◈"
         case .kiro: return "❖"
         case .amp: return "⚡"
+        case .aider: return "✦"
+        case .cline: return "◎"
+        case .goose: return "⬢"
+        case .qwen: return "❋"
         case .unknown: return "●"
         }
     }
