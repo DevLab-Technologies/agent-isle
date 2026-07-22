@@ -123,10 +123,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Global session switcher
 
-    // TODO: make the chord user-configurable (AppSettings) — fixed at ⌥⌘Space for now.
+    // TODO: make the chord user-configurable (AppSettings) — fixed at ⌃⌥⌘Space for now.
+    // ⌃⌥⌘Space is chosen to avoid common system chords: ⌘Space (Spotlight),
+    // ⌃Space / ⌃⌥Space (input sources), ⌃⌘Space (Character Viewer), and ⌥⌘Space
+    // (Finder search window).
     private func registerSwitcherHotKey() {
         switcherHotKey = GlobalHotKey(keyCode: UInt32(kVK_Space),
-                                      modifiers: UInt32(cmdKey | optionKey)) { [weak self] in
+                                      modifiers: UInt32(controlKey | optionKey | cmdKey)) { [weak self] in
             Task { @MainActor in self?.toggleSwitcher() }
         }
     }
