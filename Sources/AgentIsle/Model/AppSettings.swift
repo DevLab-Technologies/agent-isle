@@ -66,9 +66,17 @@ final class AppSettings: ObservableObject {
         didSet { d.set(hideInFullscreen, forKey: Key.hideInFullscreen); postFullscreenChange() }
     }
 
+    /// Auto-expand the island when a session needs attention (permission/question). When
+    /// off, attention still plays the sound cue and posts the banner, but the panel never
+    /// pops open on its own. Master switch for the auto-expand behavior.
+    @Published var autoExpandOnAttention: Bool {
+        didSet { d.set(autoExpandOnAttention, forKey: Key.autoExpandOnAttention) }
+    }
+
     /// Skip auto-expanding the island for a new attention event when the session's own
     /// terminal is already frontmost — the user is looking at that session, so popping the
     /// panel open would just get in the way. The sound cue and banner still fire.
+    /// Only consulted when `autoExpandOnAttention` is on.
     @Published var smartSuppression: Bool {
         didSet { d.set(smartSuppression, forKey: Key.smartSuppression) }
     }
@@ -106,6 +114,7 @@ final class AppSettings: ObservableObject {
         static let notificationsEnabled = "notificationsEnabled"
         static let expandOnHover = "expandOnHover"
         static let hideInFullscreen = "hideInFullscreen"
+        static let autoExpandOnAttention = "autoExpandOnAttention"
         static let smartSuppression = "smartSuppression"
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
@@ -126,6 +135,7 @@ final class AppSettings: ObservableObject {
             Key.notificationsEnabled: true,
             Key.expandOnHover: true,
             Key.hideInFullscreen: true,
+            Key.autoExpandOnAttention: true,
             Key.smartSuppression: true,
             Key.showTokens: true,
             Key.showTerminal: true,
@@ -142,6 +152,7 @@ final class AppSettings: ObservableObject {
         notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
         expandOnHover = d.bool(forKey: Key.expandOnHover)
         hideInFullscreen = d.bool(forKey: Key.hideInFullscreen)
+        autoExpandOnAttention = d.bool(forKey: Key.autoExpandOnAttention)
         smartSuppression = d.bool(forKey: Key.smartSuppression)
         showTokens = d.bool(forKey: Key.showTokens)
         showTerminal = d.bool(forKey: Key.showTerminal)

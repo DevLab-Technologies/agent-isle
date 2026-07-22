@@ -162,10 +162,15 @@ struct DisplaySettings: View {
                             subtitle: "Hide the notch island while a fullscreen window is frontmost.") {
                     Toggle("", isOn: $settings.hideInFullscreen).labelsHidden().toggleStyle(.switch)
                 }
+                SettingsRow(title: "Auto-expand on Attention",
+                            subtitle: "Open the panel automatically when a session needs a permission or asks a question.") {
+                    Toggle("", isOn: $settings.autoExpandOnAttention).labelsHidden().toggleStyle(.switch)
+                }
                 SettingsRow(title: "Smart Suppression",
-                            subtitle: "Don't auto-expand for a session whose terminal is already frontmost.",
+                            subtitle: "When auto-expand is on, skip it for a session whose terminal is already frontmost.",
                             showsDivider: false) {
                     Toggle("", isOn: $settings.smartSuppression).labelsHidden().toggleStyle(.switch)
+                        .disabled(!settings.autoExpandOnAttention)
                 }
             }
 

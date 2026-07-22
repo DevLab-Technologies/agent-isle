@@ -191,6 +191,7 @@ final class EventServer {
     /// decides the user is already looking at that session's terminal (see
     /// `SessionStore.shouldAutoExpand`).
     private func maybeAutoExpand(_ sessionID: UUID) {
+        guard AppSettings.shared.autoExpandOnAttention else { return }
         guard let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         if store.shouldAutoExpand(for: session,
