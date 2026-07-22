@@ -52,6 +52,11 @@ final class AppSettings: ObservableObject {
     @Published var soundVolume: Double {
         didSet { d.set(soundVolume, forKey: Key.soundVolume); SoundPlayer.shared.volume = soundVolume }
     }
+    /// Per-event custom-audio overrides. When an event has one, its file plays instead of
+    /// the synthesized cue. Persisted as a JSON map of event key -> file path.
+    @Published var soundPack: SoundPack {
+        didSet { persistSoundPack(); SoundPlayer.shared.pack = soundPack }
+    }
 
     // MARK: Notifications
     @Published var notificationsEnabled: Bool {
@@ -169,6 +174,7 @@ final class AppSettings: ObservableObject {
     private enum Key {
         static let soundEnabled = "soundEnabled"
         static let soundVolume = "soundVolume"
+        static let soundPack = "soundPack"
         static let notificationsEnabled = "notificationsEnabled"
         static let quietScenesEnabled = "quietScenesEnabled"
         static let quietDuringFocus = "quietDuringFocus"
@@ -225,6 +231,7 @@ final class AppSettings: ObservableObject {
         ])
         soundEnabled = d.bool(forKey: Key.soundEnabled)
         soundVolume = d.double(forKey: Key.soundVolume)
+        soundPack = AppSettings.loadSoundPack(from: d)
         notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
         quietScenesEnabled = d.bool(forKey: Key.quietScenesEnabled)
         quietDuringFocus = d.bool(forKey: Key.quietDuringFocus)
@@ -261,6 +268,7 @@ final class AppSettings: ObservableObject {
 
         // Push initial prefs into the runtime pieces (didSet doesn't fire during init).
         SoundPlayer.shared.volume = soundVolume
+        SoundPlayer.shared.pack = soundPack
         // Seed the quiet-scenes config, then fold it into the sound/notifier gates. Safe
         // during init: QuietScenes.onChange is still nil, so `configure` won't re-enter here.
         pushQuietConfig()
@@ -308,6 +316,30 @@ final class AppSettings: ObservableObject {
         if let data = try? JSONEncoder().encode(sessionFilters) {
             d.set(data, forKey: Key.sessionFilters)
         }
+    }
+
+    // MARK: - Custom sound packs
+
+    /// Set (or clear, with `nil`) the custom audio file for one sound event. Triggers the
+    /// `soundPack` didSet, which persists and pushes the change into `SoundPlayer`.
+    func setCustomSound(_ url: URL?, for event: SoundPlayer.Event) {
+        var pack = soundPack
+        pack.set(url, for: event)
+        soundPack = pack
+    }
+
+    private func persistSoundPack() {
+        if let data = try? JSONEncoder().encode(soundPack.overrides) {
+            d.set(data, forKey: Key.soundPack)
+        }
+    }
+
+    private static func loadSoundPack(from d: UserDefaults) -> SoundPack {
+        guard let data = d.data(forKey: Key.soundPack),
+              let map = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return SoundPack()
+        }
+        return SoundPack(overrides: map)
     }
 
     private static func loadFilters(from d: UserDefaults) -> [SessionFilter] {

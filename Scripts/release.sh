@@ -103,9 +103,23 @@ if [[ -n "${SIGN_IDENTITY:-}" && ${#NOTARY_ARGS[@]} -gt 0 ]]; then
   NOTARIZED=1
 fi
 
+# --- Cask metadata -----------------------------------------------------------
+# The Homebrew cask (Casks/agent-isle.rb) pins the release zip by sha256. Compute
+# it here and write dist/cask-info.txt so each release can update the cask's
+# `version`/`sha256` in one copy-paste. (Publishing to a real tap is a follow-up.)
+ZIP="$ROOT/dist/Agent-Isle.zip"
+SHA256="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
+cat > "$ROOT/dist/cask-info.txt" <<INFO
+version $VERSION
+sha256 $SHA256
+INFO
+
 echo
 echo "✓ Universal binary: $(lipo -archs "$CONTENTS/MacOS/AgentIsle")"
-echo "✓ Shareable zip:    $ROOT/dist/Agent-Isle.zip"
+echo "✓ Shareable zip:    $ZIP"
+echo "✓ Cask version:     $VERSION"
+echo "✓ Cask sha256:      $SHA256"
+echo "  (also written to dist/cask-info.txt — update Casks/agent-isle.rb with these)"
 if [[ "$NOTARIZED" == "1" ]]; then
   echo "✓ Notarized & stapled — friends can just double-click to open."
 else

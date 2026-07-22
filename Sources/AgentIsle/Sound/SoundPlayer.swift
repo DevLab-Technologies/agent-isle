@@ -1,28 +1,50 @@
 import AVFoundation
 
-/// Synthesized 8-bit style event sounds — no audio files needed.
+/// Event sounds. Each cue is a synthesized 8-bit square wave by default, but the user
+/// can override any event with their own audio file (see `SoundPack`).
 ///
-/// Main-actor isolated: `enabled`/`volume` are driven from `AppSettings` and `play()` is
-/// called from the (main-actor) store, so isolation is enforced rather than assumed.
+/// Main-actor isolated: `enabled`/`volume`/`pack` are driven from `AppSettings` and
+/// `play()` is called from the (main-actor) store, so isolation is enforced rather than
+/// assumed.
 @MainActor
 final class SoundPlayer {
     static let shared = SoundPlayer()
 
     var enabled = true
-    /// 0…1 loudness, driven by `AppSettings.soundVolume`. Scales the wave amplitude.
+    /// 0…1 loudness, driven by `AppSettings.soundVolume`. Scales the wave amplitude and
+    /// the custom-file player volume.
     var volume: Double = 0.6
+    /// User-provided per-event overrides; when an event has one, its file plays instead
+    /// of the synthesized cue. Driven by `AppSettings.soundPack`.
+    var pack = SoundPack()
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let sampleRate: Double = 44_100
     private var started = false
+    /// Retains one file player per event so a cue isn't cut off by ARC mid-playback.
+    private var filePlayers: [Event: AVAudioPlayer] = [:]
 
-    enum Event {
+    enum Event: String, CaseIterable {
         case attention   // needs a decision
         case approve
         case deny
         case select
         case done
+
+        /// Stable key used for persistence of custom-sound overrides.
+        var key: String { rawValue }
+
+        /// Human-readable label for the settings UI.
+        var label: String {
+            switch self {
+            case .attention: return "Attention"
+            case .approve:   return "Approve"
+            case .deny:      return "Deny"
+            case .select:    return "Select"
+            case .done:      return "Done"
+            }
+        }
 
         /// Sequence of (frequency Hz, duration s) notes.
         var notes: [(Double, Double)] {
@@ -44,10 +66,26 @@ final class SoundPlayer {
 
     func play(_ event: Event) {
         guard enabled else { return }
+        if let url = pack.playableURL(for: event), playFile(url, for: event) { return }
         ensureRunning()
         let buffer = makeBuffer(for: event.notes)
         player.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
         if !player.isPlaying { player.play() }
+    }
+
+    /// Plays a user-provided audio file for `event`. Returns false (so the caller falls
+    /// back to the synthesized cue) if the file can't be decoded/played.
+    private func playFile(_ url: URL, for event: Event) -> Bool {
+        do {
+            let audio = try AVAudioPlayer(contentsOf: url)
+            audio.volume = Float(max(0, min(1, volume)))
+            guard audio.prepareToPlay(), audio.play() else { return false }
+            filePlayers[event] = audio   // retain until the next cue for this event
+            return true
+        } catch {
+            NSLog("SoundPlayer: custom sound failed for \(event.key): \(error)")
+            return false
+        }
     }
 
     private func ensureRunning() {
