@@ -10,12 +10,34 @@ struct UsageSettings: View {
         SettingsScaffold(section: .usage) {
             filters
             summary
+            windowsCard
             chartCard
             if usage.grouping == .project || usage.grouping == .session {
                 breakdownTable
             }
         }
         .task { await usage.refresh() }   // refresh whenever the section appears
+    }
+
+    // MARK: Rolling windows
+
+    @ViewBuilder private var windowsCard: some View {
+        let usages = usage.activeWindowUsages
+        if !usages.isEmpty {
+            SettingsGroup(title: "Current usage windows",
+                          footnote: "Rolling totals for the current period. Percentages appear only where a plan cap is known; otherwise the raw rolling total is shown.") {
+                ForEach(Array(usages.enumerated()), id: \.element.agent.id) { agentIdx, agentUsage in
+                    ForEach(Array(agentUsage.stats.enumerated()), id: \.element.id) { statIdx, stat in
+                        let isLast = agentIdx == usages.count - 1 && statIdx == agentUsage.stats.count - 1
+                        SettingsRow(title: "\(agentUsage.agent.displayName) · \(stat.window.longLabel)",
+                                    subtitle: stat.cap == nil ? "No plan cap known" : nil,
+                                    showsDivider: !isLast) {
+                            WindowStatTrailing(stat: stat, tint: agentUsage.agent.tint)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Filters
@@ -157,6 +179,36 @@ struct UsageSettings: View {
                             .frame(width: 56, alignment: .trailing)
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Trailing readout for one rolling window: a used/cap percentage bar when a cap is
+/// known, otherwise the raw rolling token total.
+private struct WindowStatTrailing: View {
+    let stat: WindowStat
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let fraction = stat.fraction {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        Capsule().fill(tint.opacity(0.8))
+                            .frame(width: geo.size.width * CGFloat(min(fraction, 1)))
+                    }
+                }
+                .frame(width: 120, height: 5)
+                Text(stat.display)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .frame(width: 48, alignment: .trailing)
+            } else {
+                Text(formatTokens(stat.usedTokens))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(alignment: .trailing)
             }
         }
     }

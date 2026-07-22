@@ -6,6 +6,7 @@ struct ExpandedIsland: View {
     let notchHeight: CGFloat
     @EnvironmentObject var store: SessionStore
     @EnvironmentObject var settings: AppSettings
+    @ObservedObject private var usage = UsageStore.shared
 
     private var panelWidth: CGFloat { max(440, CGFloat(settings.maxPanelWidth)) }
 
@@ -13,6 +14,7 @@ struct ExpandedIsland: View {
         VStack(spacing: 0) {
             notchBar           // occupies the physical-notch band; content only in the ears
             Divider().overlay(Theme.Fill.hairline)
+            usageReadoutBar
             if let session = store.openedSession {
                 SessionChatView(session: session)
             } else {
@@ -20,6 +22,7 @@ struct ExpandedIsland: View {
             }
         }
         .frame(width: panelWidth)
+        .task { await usage.refresh() }   // warm the rolling-window readout when the panel opens
         .background(
             NotchShape(bottomRadius: 26)
                 .fill(.black)
@@ -89,6 +92,38 @@ struct ExpandedIsland: View {
             .padding(.trailing, 14)
         }
         .frame(height: max(notchHeight, 32))
+    }
+
+    /// Compact rolling-usage readout for the focused session's agent, e.g.
+    /// "5h 62% · 7d 41%" (cap known) or "5h 1.2M · 7d 4.8M" (no cap). Hidden when the
+    /// toggle is off, no session is focused, or that agent has no window data yet.
+    @ViewBuilder private var usageReadoutBar: some View {
+        if settings.showUsageReadout,
+           let agent = (store.openedSession ?? store.focusSession)?.agent,
+           let readout = usage.windowUsage(for: agent) {
+            HStack(spacing: 6) {
+                Circle().fill(agent.tint).frame(width: 6, height: 6)
+                Text(agent.displayName.uppercased())
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.Ink.tertiary)
+                Text(readout.compact)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Theme.Ink.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if !readout.hasKnownCap {
+                    Text("no cap")
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .tracking(0.4)
+                        .foregroundStyle(Theme.Ink.tertiary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 5)
+            Divider().overlay(Theme.Fill.hairline)
+        }
     }
 
     /// Gear menu — the reliable way to quit and toggle settings, since the menu-bar

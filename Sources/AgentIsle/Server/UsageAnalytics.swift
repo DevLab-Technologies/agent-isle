@@ -18,6 +18,21 @@ enum UsageAnalytics {
         var messages: Int
     }
 
+    /// A single timestamped token event, retained only for *recent* activity so the
+    /// UsageStore can compute rolling-window sums (5-hour / 7-day) against the current
+    /// clock. Distinct from `Record`, which is day-bucketed for the historical charts and
+    /// too coarse for a 5-hour window.
+    struct Event: Equatable {
+        let agent: AgentKind
+        let timestamp: Date
+        let tokens: Int
+    }
+
+    /// How far back `scan` keeps individual events. A little over the widest rolling
+    /// window (7 days) so the 7-day sum is complete without hoarding a whole history in
+    /// memory. Files untouched for longer simply contribute no events.
+    static let recentEventWindow: TimeInterval = 8 * 24 * 3600
+
     private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -49,20 +64,33 @@ enum UsageAnalytics {
     /// Parse one transcript into session-day records. `folderName` (the encoded project
     /// directory) is used to derive a project label when the transcript lines omit `cwd`.
     static func scanFile(_ url: URL, folderName: String, maxBytes: Int = 12_000_000) -> [Record] {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        scan(url, folderName: folderName, maxBytes: maxBytes).records
+    }
+
+    /// Parse one transcript into both day-bucketed records (for the historical charts) and
+    /// recent timestamped events (for the rolling-window readouts). Events older than
+    /// `now - recentEventWindow` are dropped so memory stays bounded. `agent` tags the
+    /// events/records — Claude Code transcripts today, but kept as a parameter so other
+    /// agents' scanners can reuse this once their transcript formats are wired in.
+    static func scan(_ url: URL, folderName: String, agent: AgentKind = .claude,
+                     now: Date = Date(), maxBytes: Int = 12_000_000)
+        -> (records: [Record], events: [Event]) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return ([], []) }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
         try? handle.seek(toOffset: 0)
         let data: Data = size > UInt64(maxBytes)
             ? ((try? handle.read(upToCount: maxBytes)) ?? Data())
             : ((try? handle.readToEnd()) ?? Data())
-        guard !data.isEmpty else { return [] }
+        guard !data.isEmpty else { return ([], []) }
 
         let sessionID = url.deletingPathExtension().lastPathComponent
         let cal = Calendar.current
+        let eventCutoff = now.addingTimeInterval(-recentEventWindow)
         var cwd: String?
         // Accumulate per day so one long session spanning midnight splits correctly.
         var byDay: [Date: (tokens: Int, messages: Int)] = [:]
+        var events: [Event] = []
 
         let text = String(decoding: data, as: UTF8.self)
         for line in text.split(separator: "\n") {
@@ -81,15 +109,19 @@ enum UsageAnalytics {
             bucket.tokens += tokens
             bucket.messages += 1
             byDay[day] = bucket
+            if date >= eventCutoff {
+                events.append(Event(agent: agent, timestamp: date, tokens: tokens))
+            }
         }
 
         let projectPath = cwd ?? decodeProjectPath(folderName)
         let project = (projectPath as NSString).lastPathComponent
-        return byDay.map { day, v in
+        let records = byDay.map { day, v in
             Record(sessionID: sessionID, project: project.isEmpty ? "unknown" : project,
-                   projectPath: projectPath, agent: .claude, day: day,
+                   projectPath: projectPath, agent: agent, day: day,
                    tokens: v.tokens, messages: v.messages)
         }
+        return (records, events)
     }
 
     private static func parseDate(_ s: String) -> Date? {

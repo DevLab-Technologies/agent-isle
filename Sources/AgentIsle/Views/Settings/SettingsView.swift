@@ -43,7 +43,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var store: SessionStore
-    @StateObject private var usage = UsageStore()
+    @ObservedObject private var usage = UsageStore.shared
     @State private var selection: SettingsSection =
         SettingsSection(rawValue: ProcessInfo.processInfo.environment["AGENT_ISLE_SECTION"] ?? "") ?? .general
 
