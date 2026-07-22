@@ -41,16 +41,20 @@ struct PermissionCard: View {
             }
 
             HStack(spacing: 6) {
-                decisionButton("Deny", style: .deny) {
+                decisionButton("Deny", style: .deny,
+                               shortcut: shortcut(.deny)) {
                     store.resolvePermission(sessionID: session.id, decision: .deny)
                 }
-                decisionButton("Allow Once", style: .neutral) {
+                decisionButton("Allow Once", style: .neutral,
+                               shortcut: shortcut(.allowOnce)) {
                     store.resolvePermission(sessionID: session.id, decision: .allowOnce)
                 }
-                decisionButton("Always Allow", style: .accent) {
+                decisionButton("Always Allow", style: .accent,
+                               shortcut: shortcut(.always)) {
                     store.resolvePermission(sessionID: session.id, decision: .always)
                 }
-                decisionButton("Bypass", style: .danger) {
+                decisionButton("Bypass", style: .danger,
+                               shortcut: shortcut(.bypass)) {
                     store.resolvePermission(sessionID: session.id, decision: .bypass)
                 }
             }
@@ -60,6 +64,23 @@ struct PermissionCard: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(SessionStatus.waiting.color.opacity(0.06))
         )
+    }
+
+    // MARK: - Keyboard shortcuts
+
+    /// Only the focus session's card wires the shortcuts, so two waiting sessions can't
+    /// register the same chord (which SwiftUI would resolve ambiguously). ⌘Y / ⌘N and the
+    /// modified ⌘Y variants map onto the existing decisions without touching the model.
+    private var shortcutsEnabled: Bool { store.focusSession?.id == session.id }
+
+    private func shortcut(_ decision: PermissionDecision) -> KeyboardShortcut? {
+        guard shortcutsEnabled else { return nil }
+        switch decision {
+        case .deny:      return KeyboardShortcut("n", modifiers: .command)
+        case .allowOnce: return KeyboardShortcut("y", modifiers: .command)
+        case .always:    return KeyboardShortcut("y", modifiers: [.command, .option])
+        case .bypass:    return KeyboardShortcut("y", modifiers: [.command, .shift])
+        }
     }
 
     private var diffPreview: some View {
@@ -136,6 +157,7 @@ struct PermissionCard: View {
     }
 
     private func decisionButton(_ title: String, style: DecisionStyle,
+                                shortcut: KeyboardShortcut? = nil,
                                 action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
@@ -149,6 +171,7 @@ struct PermissionCard: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(style.stroke, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(shortcut)
     }
 }
 
@@ -171,6 +194,22 @@ struct QuestionCard: View {
     /// A single single-select part is answered instantly on tap (no Submit needed).
     private var isSimpleSingle: Bool {
         question.parts.count == 1 && !question.parts[0].multiSelect
+    }
+
+    /// Only the focus session's card wires ⌘-number selection, so two asking sessions
+    /// don't register the same chord (which SwiftUI would resolve ambiguously). We also
+    /// only show the number badges when the shortcuts are actually live.
+    private var shortcutsEnabled: Bool { store.focusSession?.id == session.id }
+
+    /// Running 0-based option offset for a part, so options are numbered ⌘1…⌘9 in order
+    /// across every part of the ask.
+    private func optionOffset(before part: QuestionPart) -> Int {
+        var n = 0
+        for p in question.parts {
+            if p.id == part.id { break }
+            n += p.options.count
+        }
+        return n
     }
 
     var body: some View {
@@ -197,6 +236,15 @@ struct QuestionCard: View {
             }
             if !isSimpleSingle {
                 submitButton
+                // Return submits via the button below; this hidden control adds ⌘Return
+                // as an equivalent, matching the multi-select instructions.
+                if shortcutsEnabled {
+                    Button("", action: submit)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(composedAnswer() == nil)
+                        .opacity(0).frame(width: 0, height: 0)
+                        .accessibilityHidden(true)
+                }
             }
             if question.source == .transcript {
                 // No parked hook to reply to — the answer is typed into the host app.
@@ -231,8 +279,9 @@ struct QuestionCard: View {
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(3)
             }
+            let base = optionOffset(before: part)
             ForEach(Array(part.options.enumerated()), id: \.offset) { idx, option in
-                optionRow(part: part, idx: idx, option: option)
+                optionRow(part: part, idx: idx, option: option, number: base + idx + 1)
             }
             if part.allowsOther {
                 otherRow(part)
@@ -240,8 +289,9 @@ struct QuestionCard: View {
         }
     }
 
-    private func optionRow(part: QuestionPart, idx: Int, option: String) -> some View {
+    private func optionRow(part: QuestionPart, idx: Int, option: String, number: Int) -> some View {
         let isSelected = selected[part.id]?.contains(idx) == true
+        let showBadge = shortcutsEnabled && number <= 9
         return Button {
             selectOption(part: part, idx: idx, option: option)
         } label: {
@@ -251,6 +301,13 @@ struct QuestionCard: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.85))
                 Spacer(minLength: 0)
+                if showBadge {
+                    Text("⌘\(number)")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(accent.opacity(0.75))
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Capsule().fill(accent.opacity(0.12)))
+                }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(isSelected ? 0.10 : 0.05)))
@@ -260,6 +317,9 @@ struct QuestionCard: View {
             )
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(showBadge
+            ? KeyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
+            : nil)
     }
 
     @ViewBuilder
@@ -308,7 +368,7 @@ struct QuestionCard: View {
     private var submitButton: some View {
         let enabled = composedAnswer() != nil
         return Button(action: submit) {
-            Text("Submit")
+            Text(shortcutsEnabled ? "Submit  ⌘⏎" : "Submit")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(enabled ? .black : .white.opacity(0.4))
                 .frame(maxWidth: .infinity)
@@ -320,6 +380,9 @@ struct QuestionCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        // Plain Return also submits when focus isn't in the "Other" text field (which
+        // handles its own onSubmit). ⌘Return is wired alongside in the parent stack.
+        .keyboardShortcut(shortcutsEnabled ? KeyboardShortcut(.return, modifiers: []) : nil)
     }
 
     // MARK: - State helpers

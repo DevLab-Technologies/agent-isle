@@ -14,7 +14,7 @@ final class NotchWindow: NSPanel {
     private let settings: AppSettings
     private var hosting: NSHostingView<AnyView>?
     private var cancellable: AnyCancellable?
-    private var chatCancellable: AnyCancellable?
+    private var keyCancellable: AnyCancellable?
     private var hoverCancellable: AnyCancellable?
     private var mouseMonitors: [Any] = []
     /// Polls the pointer while hovering; catches exits through the window's dead zone
@@ -66,15 +66,19 @@ final class NotchWindow: NSPanel {
             .removeDuplicates { abs($0.width - $1.width) < 0.5 && abs($0.height - $1.height) < 0.5 }
             .sink { [weak self] size in self?.updateHitRegion(size) }
 
-        // When a chat opens, take key focus so its text field can accept typing.
-        // On close we best-effort resign key: the app is a non-activating accessory,
-        // so the frontmost terminal keeps receiving keystrokes regardless — this just
-        // avoids the panel holding key status if the app was ever activated.
-        chatCancellable = store.$openedSessionID
+        // Take key focus while the panel is explicitly expanded (clicked open) or a chat
+        // is open, so in-panel keyboard shortcuts and the chat text field receive input.
+        // Key-ness is deliberately gated to the *explicit* expanded state — not hover —
+        // so merely passing the pointer over the notch never steals keystrokes from the
+        // frontmost terminal. On collapse we best-effort resign key: the app is a
+        // non-activating accessory, so the terminal keeps receiving keystrokes regardless;
+        // this just avoids the panel holding key status once it's no longer interactive.
+        keyCancellable = Publishers.CombineLatest(store.$isExpanded, store.$openedSessionID)
+            .map { isExpanded, opened in isExpanded || opened != nil }
             .removeDuplicates()
-            .sink { [weak self] opened in
+            .sink { [weak self] shouldBeKey in
                 guard let self else { return }
-                if opened != nil {
+                if shouldBeKey {
                     self.makeKeyAndOrderFront(nil)
                 } else if self.isKeyWindow {
                     self.resignKey()
