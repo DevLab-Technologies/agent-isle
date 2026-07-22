@@ -335,6 +335,12 @@ struct DisplaySettings: View {
                 }
             }
 
+            SettingsGroup(title: "Sessions",
+                          footnote: "How long a quiet session stays on the island before it's cleared. Lower values tidy up finished work sooner; you can also dismiss a finished session by hand from its row.") {
+                SliderRow(title: "Idle Cleanup", value: $settings.idleCleanupMinutes,
+                          range: 1...60, step: 1, unit: "m", showsDivider: false)
+            }
+
             SettingsGroup(title: "Session Card") {
                 SettingsRow(title: "Show Task List",
                             subtitle: "Render the agent's todo list with progress.") {

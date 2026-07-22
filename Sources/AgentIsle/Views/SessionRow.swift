@@ -74,6 +74,9 @@ struct SessionRow: View {
                     Text(session.elapsedText)
                         .font(Theme.Font.label(9.5, weight: .regular))
                         .foregroundStyle(Theme.Ink.faint)
+                    if session.status == .done {
+                        ArchiveButton { store.archive(id: session.id) }
+                    }
                 }
                 Text(session.lastMessage)
                     .font(Theme.Font.body(10.5))
@@ -108,6 +111,24 @@ struct SessionRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { store.openChat(session) }
+    }
+}
+
+/// A small dismiss control shown on finished rows — archives the session out of the island
+/// without waiting for it to age out. Its own tap is handled here so it doesn't fall through
+/// to the row's open-chat gesture.
+private struct ArchiveButton: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "archivebox")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.Ink.tertiary)
+                .padding(3)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Dismiss this session")
     }
 }
 

@@ -12,6 +12,12 @@ final class SessionStore: ObservableObject {
     @Published var isExpanded: Bool = false
     @Published var demoMode: Bool = false
 
+    /// Sessions the user dismissed from the island by hand (see `archive(id:)`). Excluded
+    /// from `visibleSessions` so a finished session can be cleared without waiting for it to
+    /// age out. Distinct from filter-hiding: archiving is a one-off user action, and an id is
+    /// dropped from the set the moment its session becomes active again.
+    @Published private(set) var archivedIDs: Set<UUID> = []
+
     /// Whether the pointer is currently over the island. Driven by a window-level
     /// `NSEvent` monitor (see `NotchWindow`) rather than SwiftUI's `.onHover`, whose
     /// mouse-exit tracking is unreliable at the top screen edge and would leave the
@@ -74,16 +80,18 @@ final class SessionStore: ObservableObject {
     }
 
     /// Sessions the user should actually see: `orderedSessions` minus anything a filter rule
-    /// (or the probe/worker preset) hides. Every surface reads this rather than `sessions`
-    /// so hidden sessions drop out of the list, the pill, and the counts alike.
+    /// (or the probe/worker preset) hides, minus anything the user archived by hand. Every
+    /// surface reads this rather than `sessions` so hidden and archived sessions drop out of
+    /// the list, the pill, and the counts alike.
     var visibleSessions: [AgentSession] {
-        orderedSessions.filter { !AppSettings.shared.isHidden($0) }
+        orderedSessions.filter { !AppSettings.shared.isHidden($0) && !archivedIDs.contains($0.id) }
     }
 
     /// How many sessions are currently filtered out — surfaced as "+N hidden" so nothing is
-    /// silently dropped.
+    /// silently dropped. Counts only filter-hidden sessions; archived ones are a deliberate
+    /// user dismissal, not a filtered-away session, so they're excluded from this count.
     var hiddenCount: Int {
-        sessions.count - visibleSessions.count
+        orderedSessions.filter { AppSettings.shared.isHidden($0) && !archivedIDs.contains($0.id) }.count
     }
 
     /// The session the collapsed island should surface first.
@@ -148,6 +156,7 @@ final class SessionStore: ObservableObject {
         } else {
             sessions.append(session)
         }
+        clearArchiveIfActive(id: session.id, status: session.status)
     }
 
     func update(id: UUID, _ transform: (inout AgentSession) -> Void) {
@@ -156,6 +165,9 @@ final class SessionStore: ObservableObject {
         transform(&s)
         s.updatedAt = Date()
         sessions[idx] = s
+        // An archived session that starts working (or needs attention) again should
+        // resurface rather than stay dismissed forever.
+        clearArchiveIfActive(id: id, status: s.status)
         // If the open session just gained (or changed) its transcript, start tailing it —
         // a hook-created row may appear before the watcher fills in the transcript path.
         if id == openedSessionID { ensureTailing(s) }
@@ -166,6 +178,7 @@ final class SessionStore: ObservableObject {
         bypassedSessions.remove(id)
         alwaysAllowed[id] = nil
         answeredTranscriptQuestions[id] = nil
+        archivedIDs.remove(id)
         if id == openedSessionID { closeChat() }
     }
 
@@ -173,7 +186,35 @@ final class SessionStore: ObservableObject {
         sessions.removeAll()
         bypassedSessions.removeAll()
         alwaysAllowed.removeAll()
+        archivedIDs.removeAll()
         if openedSessionID != nil { closeChat() }
+    }
+
+    // MARK: - Archiving
+
+    /// Dismiss a session from the island by hand — it drops out of `visibleSessions`
+    /// immediately without waiting to age out. Most useful on a `.done` row. The session
+    /// resurfaces if it becomes active again (see `clearArchiveIfActive`).
+    func archive(id: UUID) {
+        archivedIDs.insert(id)
+        if id == openedSessionID { closeChat() }
+    }
+
+    /// Bring every archived session back into view.
+    func unarchiveAll() {
+        archivedIDs.removeAll()
+    }
+
+    /// Drop an id from the archived set once its session transitions back to an active,
+    /// attention-worthy state, so a re-appearing session isn't kept hidden forever.
+    private func clearArchiveIfActive(id: UUID, status: SessionStatus) {
+        guard !archivedIDs.isEmpty else { return }
+        switch status {
+        case .working, .waiting, .asking, .planning:
+            archivedIDs.remove(id)
+        case .done, .idle:
+            break
+        }
     }
 
     // MARK: - Chat open/close
