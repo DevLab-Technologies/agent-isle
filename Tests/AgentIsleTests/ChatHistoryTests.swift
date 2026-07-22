@@ -118,7 +118,10 @@ final class ChatHistoryTests: XCTestCase {
         XCTAssertTrue(ChatHistory.isSupported(.claude))
         XCTAssertTrue(ChatHistory.isSupported(.grok))
         XCTAssertTrue(ChatHistory.isSupported(.copilot))
-        XCTAssertFalse(ChatHistory.isSupported(.codex))
+        XCTAssertTrue(ChatHistory.isSupported(.cursor))
+        XCTAssertTrue(ChatHistory.isSupported(.codex))
+        XCTAssertTrue(ChatHistory.isSupported(.goose))
+        XCTAssertFalse(ChatHistory.isSupported(.aider))
         XCTAssertFalse(ChatHistory.isSupported(.unknown))
     }
 

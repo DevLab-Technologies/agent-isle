@@ -21,7 +21,13 @@ final class Notifier: NSObject {
     /// notifier never keeps the store alive.
     weak var store: SessionStore?
 
-    private let center = UNUserNotificationCenter.current()
+    /// The system notification center, or `nil` when there is no app bundle to back it
+    /// (unit tests / CLI), where `UNUserNotificationCenter.current()` throws
+    /// `bundleProxyForCurrentProcess is nil`. In that case every notifier call is a no-op.
+    private let center: UNUserNotificationCenter? = {
+        guard NSClassFromString("XCTestCase") == nil else { return nil }
+        return UNUserNotificationCenter.current()
+    }()
 
     /// Category + action identifiers for the permission banner.
     private enum ID {
@@ -37,7 +43,7 @@ final class Notifier: NSObject {
 
     private override init() {
         super.init()
-        center.delegate = self
+        center?.delegate = self
         registerCategories()
     }
 
@@ -51,13 +57,13 @@ final class Notifier: NSObject {
                                                 actions: [allow, deny],
                                                 intentIdentifiers: [],
                                                 options: [])
-        center.setNotificationCategories([permission])
+        center?.setNotificationCategories([permission])
     }
 
     /// Ask the user once for permission to post notifications. Safe to call on every launch;
     /// the system only prompts the first time.
     func requestAuthorization() {
-        center.requestAuthorization(options: [.alert, .badge]) { granted, error in
+        center?.requestAuthorization(options: [.alert, .badge]) { granted, error in
             if let error { NSLog("Notifier: authorization failed: \(error.localizedDescription)") }
             else if !granted { NSLog("Notifier: notifications not authorized") }
         }
@@ -110,7 +116,7 @@ final class Notifier: NSObject {
         // session replaces an older one rather than stacking.
         let request = UNNotificationRequest(identifier: session.id.uuidString,
                                             content: content, trigger: nil)
-        center.add(request) { error in
+        center?.add(request) { error in
             if let error { NSLog("Notifier: could not post notification: \(error.localizedDescription)") }
         }
     }
