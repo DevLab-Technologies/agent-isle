@@ -183,6 +183,7 @@ final class EventServer {
             if let session = store.sessions.first(where: { $0.id == sessionID }) {
                 Notifier.shared.notifyPlan(session: session, summary: plan.summary)
             }
+            maybeAutoExpand(sessionID)
             park(conn, sessionID: sessionID)
 
         case "done":
