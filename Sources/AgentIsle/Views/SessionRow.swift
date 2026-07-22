@@ -110,7 +110,12 @@ struct SessionRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { store.openChat(session) }
+        .onTapGesture {
+            // Honor the click-to-jump preference: when off, the card is inert so a stray
+            // click never opens the conversation or pulls focus.
+            guard settings.clickToJump else { return }
+            store.openChat(session)
+        }
     }
 }
 

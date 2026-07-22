@@ -8,7 +8,7 @@ struct IslandRootView: View {
     @EnvironmentObject var settings: AppSettings
 
     private var expanded: Bool {
-        store.isExpanded || (settings.expandOnHover && store.isHovering) || store.isPinned
+        store.isExpanded || (settings.expandOnHover && store.hoverExpanded) || store.isPinned
     }
 
     var body: some View {
