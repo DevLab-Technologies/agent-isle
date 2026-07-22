@@ -1,25 +1,56 @@
 import AppKit
 import Foundation
 
+/// Which releases the updater considers.
+///
+/// `stable` mirrors the long-standing behavior: only full (non-pre-release) releases.
+/// `preRelease` also considers the latest pre-release tag, so testers on the beta channel
+/// pick up release candidates before they're promoted to stable.
+enum UpdateChannel: String, CaseIterable, Identifiable {
+    case stable, preRelease
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .stable:     return "Stable"
+        case .preRelease: return "Beta (includes pre-releases)"
+        }
+    }
+}
+
+/// A GitHub release reduced to the fields the channel selector needs. Kept separate from the
+/// download-bearing `FetchedRelease` so the selection logic stays pure and unit-testable.
+struct ReleaseInfo: Equatable {
+    let tag: String
+    var isPrerelease = false
+    var isDraft = false
+
+    /// The tag without a leading "v", e.g. "1.2.0" for "v1.2.0".
+    var cleanVersion: String { tag.hasPrefix("v") ? String(tag.dropFirst()) : tag }
+}
+
 /// Checks GitHub Releases for a newer build and installs it in place.
 ///
 /// Distribution is a notarized `Agent-Isle.zip` attached to each GitHub release
-/// (`DevLab-Technologies/agent-isle`). On a check we compare the latest release's
-/// tag to this build's `CFBundleShortVersionString`; if it's newer we either prompt
-/// the user or — when "Automatically Install Updates" is on — download and swap the
-/// app bundle, then relaunch.
+/// (`DevLab-Technologies/agent-isle`). On a check we list recent releases, pick the newest
+/// one appropriate for the current channel, and compare its tag to this build's
+/// `CFBundleShortVersionString`; if it's newer we either prompt the user or — when
+/// "Automatically Install Updates" is on — download and swap the app bundle, then relaunch.
 @MainActor
 final class Updater: ObservableObject {
     static let shared = Updater()
 
     private static let repo = "DevLab-Technologies/agent-isle"
-    private static let latestReleaseAPI =
-        URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!
+    /// List endpoint (newest first). Unlike `/releases/latest` it includes pre-releases, so
+    /// the channel selector can pick between them.
+    private static let releasesListAPI =
+        URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30")!
     static let releasesPage =
         URL(string: "https://github.com/\(repo)/releases/latest")!
 
     private let autoInstallKey = "autoInstallUpdates"
     private let skippedKey = "skippedUpdateVersion"
+    private let channelKey = "updateChannel"
     private let checkInterval: TimeInterval = 6 * 3600
     private var fm: FileManager { .default }
     private var timer: Timer?
@@ -32,6 +63,11 @@ final class Updater: ObservableObject {
     var autoInstall: Bool {
         get { UserDefaults.standard.bool(forKey: autoInstallKey) }
         set { UserDefaults.standard.set(newValue, forKey: autoInstallKey) }
+    }
+    /// User setting: which release channel to follow. Defaults to `.stable`.
+    var channel: UpdateChannel {
+        get { UpdateChannel(rawValue: UserDefaults.standard.string(forKey: channelKey) ?? "") ?? .stable }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: channelKey) }
     }
     /// A version the user chose to skip — we won't re-prompt for it (manual checks ignore this).
     private var skippedVersion: String? {
@@ -74,17 +110,19 @@ final class Updater: ObservableObject {
     }
 
     private func performCheck(userInitiated: Bool) async {
-        guard let release = await fetchLatest() else {
+        guard let releases = await fetchReleases() else {
             if userInitiated { showInfo("Couldn't check for updates",
                                         "Please try again later, or visit the releases page.") }
             return
         }
-        guard Self.isNewer(release.version, than: currentVersion) else {
+        guard let chosen = Self.selectRelease(channel: channel, from: releases.map(\.info)),
+              let release = releases.first(where: { $0.info.tag == chosen.tag }),
+              Self.isNewer(chosen.tag, than: currentVersion) else {
             if userInitiated { showInfo("You're up to date",
-                                        "Agent Isle \(currentVersion) is the latest version.") }
+                                        "Agent Isle \(currentVersion) is the latest version on the \(channel.title) channel.") }
             return
         }
-        if !userInitiated, release.version == skippedVersion { return }
+        if !userInitiated, chosen.tag == skippedVersion { return }
 
         if autoInstall {
             // Don't yank the app out from under a pending approval on a background
@@ -96,37 +134,75 @@ final class Updater: ObservableObject {
         }
     }
 
+    // MARK: - Channel selection
+
+    /// Pick the newest release appropriate for `channel`, or nil if none qualify. Pure and
+    /// side-effect free so it can be unit-tested against synthetic release lists.
+    ///
+    /// Drafts are always excluded. `stable` keeps only full releases; `preRelease` considers
+    /// pre-releases too. Among the candidates the highest version wins (ties keep the
+    /// earlier entry, which GitHub returns most-recently-published first).
+    nonisolated static func selectRelease(channel: UpdateChannel, from releases: [ReleaseInfo]) -> ReleaseInfo? {
+        let candidates = releases.filter { r in
+            guard !r.isDraft else { return false }
+            switch channel {
+            case .stable:     return !r.isPrerelease
+            case .preRelease: return true
+            }
+        }
+        guard var best = candidates.first else { return nil }
+        for r in candidates.dropFirst() where isNewer(r.tag, than: best.tag) { best = r }
+        return best
+    }
+
     // MARK: - GitHub
 
-    private func fetchLatest() async -> Release? {
-        var req = URLRequest(url: Self.latestReleaseAPI)
+    /// One release with everything needed to install it. `assetURL` is nil when a release has
+    /// no `.zip` asset (e.g. a notes-only pre-release), in which case we fall back to opening
+    /// the releases page.
+    private struct FetchedRelease {
+        let info: ReleaseInfo
+        let notes: String
+        let pageURL: URL
+        let assetURL: URL?
+    }
+
+    private func fetchReleases() async -> [FetchedRelease]? {
+        var req = URLRequest(url: Self.releasesListAPI)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("AgentIsle", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 15
 
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tag = json["tag_name"] as? String,
-              let assets = json["assets"] as? [[String: Any]],
-              let asset = assets.first(where: { ($0["name"] as? String)?.hasSuffix(".zip") == true }),
-              let urlStr = asset["browser_download_url"] as? String,
-              let assetURL = URL(string: urlStr)
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return nil }
 
-        let pageURL = (json["html_url"] as? String).flatMap(URL.init) ?? Self.releasesPage
-        return Release(version: tag,
-                       notes: (json["body"] as? String) ?? "",
-                       pageURL: pageURL,
-                       assetURL: assetURL)
+        return arr.compactMap { json in
+            guard let tag = json["tag_name"] as? String else { return nil }
+            let assets = json["assets"] as? [[String: Any]] ?? []
+            let assetURL = assets
+                .first(where: { ($0["name"] as? String)?.hasSuffix(".zip") == true })
+                .flatMap { $0["browser_download_url"] as? String }
+                .flatMap(URL.init)
+            let pageURL = (json["html_url"] as? String).flatMap(URL.init) ?? Self.releasesPage
+            let info = ReleaseInfo(tag: tag,
+                                   isPrerelease: (json["prerelease"] as? Bool) ?? false,
+                                   isDraft: (json["draft"] as? Bool) ?? false)
+            return FetchedRelease(info: info,
+                                  notes: (json["body"] as? String) ?? "",
+                                  pageURL: pageURL,
+                                  assetURL: assetURL)
+        }
     }
 
     // MARK: - Prompt
 
-    private func promptForUpdate(_ release: Release) {
+    private func promptForUpdate(_ release: FetchedRelease) {
         let alert = NSAlert()
-        alert.messageText = "Update available: Agent Isle \(release.cleanVersion)"
+        alert.messageText = "Update available: Agent Isle \(release.info.cleanVersion)"
         var info = "You're currently on \(currentVersion)."
+        if release.info.isPrerelease { info += " This is a pre-release build." }
         if !release.notes.isEmpty {
             info += "\n\n" + String(release.notes.prefix(500))
         }
@@ -140,7 +216,7 @@ final class Updater: ObservableObject {
         case .alertFirstButtonReturn:
             Task { await downloadAndInstall(release) }
         case .alertSecondButtonReturn:
-            skippedVersion = release.version
+            skippedVersion = release.info.tag
         default:
             break   // Later — we'll offer again on the next check
         }
@@ -148,10 +224,11 @@ final class Updater: ObservableObject {
 
     // MARK: - Download & install
 
-    private func downloadAndInstall(_ release: Release) async {
-        // Can only swap a real .app bundle in place — never a `swift run` dev process.
-        guard isPackagedApp else {
-            if showInfo("Update available: Agent Isle \(release.cleanVersion)",
+    private func downloadAndInstall(_ release: FetchedRelease) async {
+        // No installable asset, or not a real `.app` bundle (e.g. a `swift run` dev process):
+        // fall back to pointing the user at the releases page.
+        guard isPackagedApp, let assetURL = release.assetURL else {
+            if showInfo("Update available: Agent Isle \(release.info.cleanVersion)",
                         "Open the releases page to download it.",
                         confirm: "Open Releases Page") {
                 NSWorkspace.shared.open(release.pageURL)
@@ -160,7 +237,7 @@ final class Updater: ObservableObject {
         }
         var workDir: URL?
         do {
-            let (tmp, resp) = try await URLSession.shared.download(from: release.assetURL)
+            let (tmp, resp) = try await URLSession.shared.download(from: assetURL)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError.unpackFailed }
 
             let work = fm.temporaryDirectory
@@ -278,14 +355,6 @@ final class Updater: ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
         return alert.runModal() == .alertFirstButtonReturn
     }
-}
-
-private struct Release {
-    let version: String     // raw tag, e.g. "v1.1"
-    let notes: String
-    let pageURL: URL
-    let assetURL: URL
-    var cleanVersion: String { version.hasPrefix("v") ? String(version.dropFirst()) : version }
 }
 
 private enum UpdateError: Error { case unpackFailed }
