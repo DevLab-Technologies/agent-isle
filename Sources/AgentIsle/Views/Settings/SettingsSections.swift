@@ -539,7 +539,7 @@ private struct CustomSoundRow: View {
     private func preview() {
         let wasEnabled = SoundPlayer.shared.enabled
         SoundPlayer.shared.enabled = true          // always audible for preview
-        SoundPlayer.shared.play(event)
+        SoundPlayer.shared.play(event, coalesce: false)   // explicit: never burst-dropped
         SoundPlayer.shared.enabled = wasEnabled
     }
 
