@@ -73,6 +73,63 @@ final class AppSettings: ObservableObject {
         didSet { persistSoundPack(); SoundPlayer.shared.pack = soundPack }
     }
 
+    // MARK: Voice callouts
+    /// Master switch for spoken callouts. Off by default (opt-in), like the competitor's
+    /// auto-play. When on, `applyMuting` still gates it by quiet scenes.
+    @Published var voiceEnabled: Bool {
+        didSet { d.set(voiceEnabled, forKey: Key.voiceEnabled); applyMuting() }
+    }
+    /// Which engine speaks. `.system` is on-device and fully local; the others are opt-in
+    /// bring-your-own-key cloud providers (see `VoiceProvider`).
+    @Published var voiceProvider: VoiceProvider {
+        didSet { d.set(voiceProvider.rawValue, forKey: Key.voiceProvider); pushVoiceConfig() }
+    }
+    /// Who phrases the spoken line — the on-device heuristic, or a BYO-key LLM.
+    @Published var voiceSummaryProvider: SummaryProvider {
+        didSet { d.set(voiceSummaryProvider.rawValue, forKey: Key.voiceSummaryProvider); pushVoiceConfig() }
+    }
+    @Published var voiceStyle: VoiceStyle {
+        didSet { d.set(voiceStyle.rawValue, forKey: Key.voiceStyle); pushVoiceConfig() }
+    }
+    /// Give each agent its own stable voice (the competitor's headline touch).
+    @Published var voiceDistinctPerAgent: Bool {
+        didSet { d.set(voiceDistinctPerAgent, forKey: Key.voiceDistinctPerAgent); pushVoiceConfig() }
+    }
+    @Published var voiceVolume: Double {
+        didSet { d.set(voiceVolume, forKey: Key.voiceVolume); pushVoiceConfig() }
+    }
+    /// Speak when an agent finishes a turn (the primary callout).
+    @Published var voiceAnnounceOnDone: Bool {
+        didSet { d.set(voiceAnnounceOnDone, forKey: Key.voiceAnnounceOnDone); pushVoiceConfig() }
+    }
+    /// Also speak when an agent needs a decision (permission / question / plan).
+    @Published var voiceAnnounceOnAttention: Bool {
+        didSet { d.set(voiceAnnounceOnAttention, forKey: Key.voiceAnnounceOnAttention); pushVoiceConfig() }
+    }
+    /// Cloud voice: an OpenAI voice name (e.g. "nova") or an ElevenLabs voice id. Empty picks
+    /// a sensible default (per-agent for OpenAI when distinct voices are on).
+    @Published var voiceCloudVoice: String {
+        didSet { d.set(voiceCloudVoice, forKey: Key.voiceCloudVoice); pushVoiceConfig() }
+    }
+
+    /// BYO API keys. Mirrored to the Keychain (never `UserDefaults`). The `@Published` strings
+    /// are the live source of truth (so a field edit is instantly visible to previews and the
+    /// announcer via `pushVoiceConfig`); the slower Keychain write is debounced so typing a key
+    /// doesn't hit the Keychain on every keystroke. Pending writes are flushed on settings
+    /// close / app quit (see `flushPendingKeyWrites`).
+    @Published var openAIKey: String {
+        didSet { pushVoiceConfig(); scheduleKeyPersist(openAIKey, for: Keychain.Account.openAIKey) }
+    }
+    @Published var elevenLabsKey: String {
+        didSet { pushVoiceConfig(); scheduleKeyPersist(elevenLabsKey, for: Keychain.Account.elevenLabsKey) }
+    }
+    @Published var anthropicKey: String {
+        didSet { pushVoiceConfig(); scheduleKeyPersist(anthropicKey, for: Keychain.Account.anthropicKey) }
+    }
+    /// In-flight debounced Keychain writes, keyed by account so a newer edit supersedes an
+    /// older pending write for the same key.
+    private var keyPersistTasks: [String: Task<Void, Never>] = [:]
+
     // MARK: Notifications
     @Published var notificationsEnabled: Bool {
         didSet { d.set(notificationsEnabled, forKey: Key.notificationsEnabled); applyMuting() }
@@ -225,6 +282,15 @@ final class AppSettings: ObservableObject {
         static let soundEnabled = "soundEnabled"
         static let soundVolume = "soundVolume"
         static let soundPack = "soundPack"
+        static let voiceEnabled = "voiceEnabled"
+        static let voiceProvider = "voiceProvider"
+        static let voiceSummaryProvider = "voiceSummaryProvider"
+        static let voiceStyle = "voiceStyle"
+        static let voiceDistinctPerAgent = "voiceDistinctPerAgent"
+        static let voiceVolume = "voiceVolume"
+        static let voiceAnnounceOnDone = "voiceAnnounceOnDone"
+        static let voiceAnnounceOnAttention = "voiceAnnounceOnAttention"
+        static let voiceCloudVoice = "voiceCloudVoice"
         static let notificationsEnabled = "notificationsEnabled"
         static let quietScenesEnabled = "quietScenesEnabled"
         static let quietDuringFocus = "quietDuringFocus"
@@ -262,6 +328,15 @@ final class AppSettings: ObservableObject {
         d.register(defaults: [
             Key.soundEnabled: true,
             Key.soundVolume: 0.6,
+            Key.voiceEnabled: false,
+            Key.voiceProvider: VoiceProvider.system.rawValue,
+            Key.voiceSummaryProvider: SummaryProvider.heuristic.rawValue,
+            Key.voiceStyle: VoiceStyle.standard.rawValue,
+            Key.voiceDistinctPerAgent: true,
+            Key.voiceVolume: 0.9,
+            Key.voiceAnnounceOnDone: true,
+            Key.voiceAnnounceOnAttention: false,
+            Key.voiceCloudVoice: "",
             Key.notificationsEnabled: true,
             Key.quietScenesEnabled: true,
             Key.quietDuringFocus: true,
@@ -294,6 +369,18 @@ final class AppSettings: ObservableObject {
         soundEnabled = d.bool(forKey: Key.soundEnabled)
         soundVolume = d.double(forKey: Key.soundVolume)
         soundPack = AppSettings.loadSoundPack(from: d)
+        voiceEnabled = d.bool(forKey: Key.voiceEnabled)
+        voiceProvider = VoiceProvider(rawValue: d.string(forKey: Key.voiceProvider) ?? "") ?? .system
+        voiceSummaryProvider = SummaryProvider(rawValue: d.string(forKey: Key.voiceSummaryProvider) ?? "") ?? .heuristic
+        voiceStyle = VoiceStyle(rawValue: d.string(forKey: Key.voiceStyle) ?? "") ?? .standard
+        voiceDistinctPerAgent = d.bool(forKey: Key.voiceDistinctPerAgent)
+        voiceVolume = d.double(forKey: Key.voiceVolume)
+        voiceAnnounceOnDone = d.bool(forKey: Key.voiceAnnounceOnDone)
+        voiceAnnounceOnAttention = d.bool(forKey: Key.voiceAnnounceOnAttention)
+        voiceCloudVoice = d.string(forKey: Key.voiceCloudVoice) ?? ""
+        openAIKey = Keychain.get(Keychain.Account.openAIKey) ?? ""
+        elevenLabsKey = Keychain.get(Keychain.Account.elevenLabsKey) ?? ""
+        anthropicKey = Keychain.get(Keychain.Account.anthropicKey) ?? ""
         notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
         quietScenesEnabled = d.bool(forKey: Key.quietScenesEnabled)
         quietDuringFocus = d.bool(forKey: Key.quietDuringFocus)
@@ -337,6 +424,7 @@ final class AppSettings: ObservableObject {
         // Push initial prefs into the runtime pieces (didSet doesn't fire during init).
         SoundPlayer.shared.volume = soundVolume
         SoundPlayer.shared.pack = soundPack
+        pushVoiceConfig()
         // Seed the quiet-scenes config, then fold it into the sound/notifier gates. Safe
         // during init: QuietScenes.onChange is still nil, so `configure` won't re-enter here.
         pushQuietConfig()
@@ -364,6 +452,55 @@ final class AppSettings: ObservableObject {
         let quiet = QuietScenes.shared.isSuppressing
         SoundPlayer.shared.enabled = soundEnabled && !quiet
         Notifier.shared.enabled = notificationsEnabled && !quiet
+        let voiceOn = voiceEnabled && !quiet
+        let voiceWasOn = VoiceAnnouncer.shared.enabled
+        VoiceAnnouncer.shared.enabled = voiceOn
+        // Cut any in-flight callout only on the on→off transition (voice disabled or a quiet
+        // scene starting) — not on every unrelated preference change while voice is already off.
+        if voiceWasOn && !voiceOn { VoiceAnnouncer.shared.stop() }
+    }
+
+    // MARK: - API key persistence
+
+    /// Debounce the Keychain write for `account`: cancel any pending write and schedule a fresh
+    /// one shortly after the last edit. The in-memory `@Published` value is already current, so
+    /// previews and the announcer see the key immediately; only the disk write waits.
+    private func scheduleKeyPersist(_ value: String, for account: String) {
+        keyPersistTasks[account]?.cancel()
+        keyPersistTasks[account] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            Keychain.set(value, for: account)
+            self?.keyPersistTasks[account] = nil
+        }
+    }
+
+    /// Flush any debounced key writes immediately (call on settings-window close and app quit,
+    /// so a key typed and then dismissed without a pause is never lost).
+    func flushPendingKeyWrites() {
+        keyPersistTasks.values.forEach { $0.cancel() }
+        keyPersistTasks.removeAll()
+        Keychain.set(openAIKey, for: Keychain.Account.openAIKey)
+        Keychain.set(elevenLabsKey, for: Keychain.Account.elevenLabsKey)
+        Keychain.set(anthropicKey, for: Keychain.Account.anthropicKey)
+    }
+
+    /// Rebuild the voice config from the current preferences and hand it (plus the resolved
+    /// BYO keys) to the announcer. Called on every voice-related change and once at launch.
+    private func pushVoiceConfig() {
+        var config = VoiceConfig()
+        config.provider = voiceProvider
+        config.summaryProvider = voiceSummaryProvider
+        config.style = voiceStyle
+        config.distinctVoicePerAgent = voiceDistinctPerAgent
+        config.volume = voiceVolume
+        config.announceOnDone = voiceAnnounceOnDone
+        config.announceOnAttention = voiceAnnounceOnAttention
+        config.cloudVoice = voiceCloudVoice.trimmingCharacters(in: .whitespacesAndNewlines)
+        VoiceAnnouncer.shared.config = config
+        VoiceAnnouncer.shared.openAIKey = openAIKey
+        VoiceAnnouncer.shared.elevenLabsKey = elevenLabsKey
+        VoiceAnnouncer.shared.anthropicKey = anthropicKey
     }
 
     /// Mirror the user's quiet-scene preferences into the observer, then re-apply muting.

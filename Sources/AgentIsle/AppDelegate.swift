@@ -303,7 +303,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Settings is closing: drop back to `.accessory` so the app disappears from ⌘Tab and
     /// the Dock again — unless another standard window is still open that needs the regular
     /// policy (guarding against yanking the Dock icon out from under a visible window).
+    func applicationWillTerminate(_ notification: Notification) {
+        // Persist any debounced API-key edits if the app quits with settings still open.
+        AppSettings.shared.flushPendingKeyWrites()
+    }
+
     private func settingsWindowWillClose() {
+        // Persist any debounced API-key edits before the window goes away.
+        AppSettings.shared.flushPendingKeyWrites()
         guard regularForSettings else { return }
         regularForSettings = false
         guard !hasOtherRegularWindow() else { return }
