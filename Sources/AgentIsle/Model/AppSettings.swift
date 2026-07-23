@@ -112,11 +112,23 @@ final class AppSettings: ObservableObject {
         didSet { d.set(voiceCloudVoice, forKey: Key.voiceCloudVoice); pushVoiceConfig() }
     }
 
-    /// BYO API keys. Mirrored to the Keychain (never `UserDefaults`); the `@Published` strings
-    /// exist only so the settings fields can bind to them.
-    @Published var openAIKey: String { didSet { Keychain.set(openAIKey, for: Keychain.Account.openAIKey); pushVoiceConfig() } }
-    @Published var elevenLabsKey: String { didSet { Keychain.set(elevenLabsKey, for: Keychain.Account.elevenLabsKey); pushVoiceConfig() } }
-    @Published var anthropicKey: String { didSet { Keychain.set(anthropicKey, for: Keychain.Account.anthropicKey); pushVoiceConfig() } }
+    /// BYO API keys. Mirrored to the Keychain (never `UserDefaults`). The `@Published` strings
+    /// are the live source of truth (so a field edit is instantly visible to previews and the
+    /// announcer via `pushVoiceConfig`); the slower Keychain write is debounced so typing a key
+    /// doesn't hit the Keychain on every keystroke. Pending writes are flushed on settings
+    /// close / app quit (see `flushPendingKeyWrites`).
+    @Published var openAIKey: String {
+        didSet { pushVoiceConfig(); scheduleKeyPersist(openAIKey, for: Keychain.Account.openAIKey) }
+    }
+    @Published var elevenLabsKey: String {
+        didSet { pushVoiceConfig(); scheduleKeyPersist(elevenLabsKey, for: Keychain.Account.elevenLabsKey) }
+    }
+    @Published var anthropicKey: String {
+        didSet { pushVoiceConfig(); scheduleKeyPersist(anthropicKey, for: Keychain.Account.anthropicKey) }
+    }
+    /// In-flight debounced Keychain writes, keyed by account so a newer edit supersedes an
+    /// older pending write for the same key.
+    private var keyPersistTasks: [String: Task<Void, Never>] = [:]
 
     // MARK: Notifications
     @Published var notificationsEnabled: Bool {
@@ -441,9 +453,36 @@ final class AppSettings: ObservableObject {
         SoundPlayer.shared.enabled = soundEnabled && !quiet
         Notifier.shared.enabled = notificationsEnabled && !quiet
         let voiceOn = voiceEnabled && !quiet
+        let voiceWasOn = VoiceAnnouncer.shared.enabled
         VoiceAnnouncer.shared.enabled = voiceOn
-        // Cut any in-flight callout the moment voice is disabled or a quiet scene starts.
-        if !voiceOn { VoiceAnnouncer.shared.stop() }
+        // Cut any in-flight callout only on the on→off transition (voice disabled or a quiet
+        // scene starting) — not on every unrelated preference change while voice is already off.
+        if voiceWasOn && !voiceOn { VoiceAnnouncer.shared.stop() }
+    }
+
+    // MARK: - API key persistence
+
+    /// Debounce the Keychain write for `account`: cancel any pending write and schedule a fresh
+    /// one shortly after the last edit. The in-memory `@Published` value is already current, so
+    /// previews and the announcer see the key immediately; only the disk write waits.
+    private func scheduleKeyPersist(_ value: String, for account: String) {
+        keyPersistTasks[account]?.cancel()
+        keyPersistTasks[account] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            Keychain.set(value, for: account)
+            self?.keyPersistTasks[account] = nil
+        }
+    }
+
+    /// Flush any debounced key writes immediately (call on settings-window close and app quit,
+    /// so a key typed and then dismissed without a pause is never lost).
+    func flushPendingKeyWrites() {
+        keyPersistTasks.values.forEach { $0.cancel() }
+        keyPersistTasks.removeAll()
+        Keychain.set(openAIKey, for: Keychain.Account.openAIKey)
+        Keychain.set(elevenLabsKey, for: Keychain.Account.elevenLabsKey)
+        Keychain.set(anthropicKey, for: Keychain.Account.anthropicKey)
     }
 
     /// Rebuild the voice config from the current preferences and hand it (plus the resolved

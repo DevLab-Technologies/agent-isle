@@ -32,6 +32,13 @@ final class VoiceAnnouncer: NSObject {
     private let synthesizer = AVSpeechSynthesizer()
     /// Serial tail: each announcement awaits the previous one, so utterances never overlap.
     private var tail: Task<Void, Never> = Task {}
+    /// Monotonic id per enqueued announcement, and the latest id seen per session. Used to drop
+    /// a queued callout that a newer one for the same session has superseded while it waited.
+    private var announceSeq = 0
+    private var latestSeqBySession: [UUID: Int] = [:]
+    /// A callout that has waited longer than this in the queue (e.g. behind a slow cloud
+    /// request or a burst) is stale — skip it rather than read out old news.
+    private let maxQueueAge: TimeInterval = 20
 
     // Playback bookkeeping. Only one cloud clip plays at a time (the queue guarantees it).
     private var audioPlayer: AVAudioPlayer?
@@ -76,10 +83,22 @@ final class VoiceAnnouncer: NSObject {
     // MARK: - Queue
 
     private func enqueue(session: AgentSession, kind: VoiceEventKind, force: Bool) {
+        announceSeq &+= 1
+        let seq = announceSeq
+        // Previews use a throwaway session; don't let them participate in supersede tracking.
+        if !force { latestSeqBySession[session.id] = seq }
+        let enqueuedAt = Date()
         let prev = tail
         tail = Task { @MainActor [weak self] in
             await prev.value
             guard let self, force || self.enabled else { return }
+            if !force {
+                // Drop if a newer callout for this session superseded this one while it waited,
+                // or if it sat in the queue long enough to be stale (behind a slow request).
+                if self.latestSeqBySession[session.id] != seq { return }
+                self.latestSeqBySession[session.id] = nil
+                guard Date().timeIntervalSince(enqueuedAt) <= self.maxQueueAge else { return }
+            }
             let text = await self.composeLine(session: session, kind: kind)
             let spoken = VoiceSummary.spoken(text)
             guard !spoken.isEmpty else { return }

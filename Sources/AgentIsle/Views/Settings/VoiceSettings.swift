@@ -144,28 +144,20 @@ struct VoiceSettings: View {
     }
 }
 
-/// A secure API-key row. Edits are held in local state and only written back to the stored
-/// (Keychain-backed) binding on commit — pressing Return or leaving the field/section — so we
-/// don't perform synchronous Keychain I/O on every keystroke.
+/// A secure API-key row bound live to the (Keychain-backed) setting, so a just-typed key is
+/// immediately visible to previews and callouts. The Keychain write itself is debounced in
+/// `AppSettings` and flushed on close/quit, so binding live costs no per-keystroke disk I/O.
 private struct APIKeyField: View {
     let title: String
     @Binding var stored: String
     var showsDivider: Bool
-    @State private var draft = ""
 
     var body: some View {
         SettingsRow(title: title,
                     subtitle: stored.isEmpty ? "Not set" : "Saved to Keychain",
                     showsDivider: showsDivider) {
-            SecureField("sk-…", text: $draft)
+            SecureField("sk-…", text: $stored)
                 .textFieldStyle(.roundedBorder).frame(width: 220)
-                .onAppear { draft = stored }
-                .onSubmit(commit)
-                .onDisappear(perform: commit)
         }
-    }
-
-    private func commit() {
-        if draft != stored { stored = draft }
     }
 }
