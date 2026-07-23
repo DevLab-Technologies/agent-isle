@@ -539,7 +539,7 @@ private struct CustomSoundRow: View {
     private func preview() {
         let wasEnabled = SoundPlayer.shared.enabled
         SoundPlayer.shared.enabled = true          // always audible for preview
-        SoundPlayer.shared.play(event)
+        SoundPlayer.shared.play(event, coalesce: false)   // explicit: never burst-dropped
         SoundPlayer.shared.enabled = wasEnabled
     }
 
@@ -562,7 +562,6 @@ struct AboutSettings: View {
     private let repoURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle")!
     private let issuesURL = URL(string: "https://github.com/DevLab-Technologies/agent-isle/issues")!
     @State private var reportingProblem = false
-    @State private var channel = Updater.shared.channel
 
     var body: some View {
         SettingsScaffold(section: .about) {
@@ -581,7 +580,13 @@ struct AboutSettings: View {
                 }
                 SettingsRow(title: "Update Channel",
                             subtitle: "Follow stable releases only, or opt into betas.") {
-                    Picker("", selection: $channel) {
+                    // Bind straight to the model (like the toggle below) so the picker
+                    // always reflects the persisted channel with no flicker or write-back
+                    // loop. Reading `Updater.shared` here is fine — a View body is
+                    // main-actor isolated, unlike a stored-property default initializer.
+                    Picker("", selection: Binding(
+                        get: { Updater.shared.channel },
+                        set: { Updater.shared.channel = $0 })) {
                         ForEach(UpdateChannel.allCases) { ch in
                             Text(ch.title).tag(ch)
                         }
@@ -589,7 +594,6 @@ struct AboutSettings: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(width: 220)
-                    .onChange(of: channel) { _, newValue in Updater.shared.channel = newValue }
                 }
                 SettingsRow(title: "Install Updates Automatically",
                             subtitle: "Download and apply new releases in the background.",

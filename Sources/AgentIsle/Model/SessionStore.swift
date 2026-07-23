@@ -271,6 +271,20 @@ final class SessionStore: ObservableObject {
         tailedURL = nil
     }
 
+    /// Force the island back to its collapsed state, regardless of *why* it was expanded.
+    /// A plain `isExpanded = false` isn't enough: the panel also stays open while a chat
+    /// is pinned (`isPinned`) or while hover-expand is latched (`hoverExpanded`), so a tap
+    /// that only cleared `isExpanded` would appear to do nothing — the "stuck expanded"
+    /// case. This clears every source and cancels the pending hover transitions so it
+    /// won't immediately re-open until the pointer leaves and returns.
+    func forceCollapse() {
+        if openedSessionID != nil { closeChat() }
+        isExpanded = false
+        hoverExpandedWork?.cancel()
+        hoverExpandedWork = nil
+        hoverExpanded = false
+    }
+
     /// Start (or switch) the tailer if the session has a transcript we aren't already
     /// following. Sessions without a transcript (e.g. external agents) show a notice.
     private func ensureTailing(_ session: AgentSession) {
