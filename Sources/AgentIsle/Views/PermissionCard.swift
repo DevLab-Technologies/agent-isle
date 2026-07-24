@@ -231,30 +231,32 @@ struct QuestionCard: View {
                         .background(Capsule().fill(accent.opacity(0.15)))
                 }
             }
+            ForEach(question.parts) { part in
+                partSection(part)
+            }
+            if !isSimpleSingle {
+                submitButton
+                // Return submits via the button below; this hidden control adds ⌘Return
+                // as an equivalent, matching the multi-select instructions.
+                if shortcutsEnabled {
+                    Button("", action: submit)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(composedAnswer() == nil)
+                        .opacity(0).frame(width: 0, height: 0)
+                        .accessibilityHidden(true)
+                }
+            }
             if question.source == .transcript {
-                // A poll-detected question has no parked hook to reply to, and its host
-                // (VS Code extension / Claude Desktop) renders AskUserQuestion as a picker in
-                // its own UI — synthetic keystrokes can't select an option there. So we don't
-                // pretend to answer from the notch: show the choices for context and focus the
-                // session so the user answers it in the host. The card clears itself once the
-                // transcript advances past the question.
-                transcriptAnswerSection
-            } else {
-                ForEach(question.parts) { part in
-                    partSection(part)
+                // No parked hook to reply to — the answer is typed into the host app's input
+                // (the chat box for GUI hosts, the prompt for terminals), which the agent reads
+                // as the reply. Needs Accessibility for the keystroke transport.
+                HStack(spacing: 4) {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 8))
+                    Text("Answer is typed into \(session.terminal)")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
                 }
-                if !isSimpleSingle {
-                    submitButton
-                    // Return submits via the button below; this hidden control adds ⌘Return
-                    // as an equivalent, matching the multi-select instructions.
-                    if shortcutsEnabled {
-                        Button("", action: submit)
-                            .keyboardShortcut(.return, modifiers: .command)
-                            .disabled(composedAnswer() == nil)
-                            .opacity(0).frame(width: 0, height: 0)
-                            .accessibilityHidden(true)
-                    }
-                }
+                .foregroundStyle(.white.opacity(0.4))
             }
         }
         .padding(10)
@@ -262,54 +264,6 @@ struct QuestionCard: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(accent.opacity(0.06))
         )
-    }
-
-    /// Read-only rendering for a transcript-detected question: the choices are shown for
-    /// context (they can't be selected from here) with a button that focuses the host session
-    /// so the user answers it there.
-    @ViewBuilder
-    private var transcriptAnswerSection: some View {
-        ForEach(question.parts) { part in
-            VStack(alignment: .leading, spacing: 4) {
-                if question.parts.count > 1 {
-                    if !part.header.isEmpty {
-                        Text(part.header.uppercased())
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(accent.opacity(0.9))
-                    }
-                    Text(part.prompt)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(3)
-                }
-                ForEach(Array(part.options.enumerated()), id: \.offset) { _, option in
-                    HStack(spacing: 6) {
-                        Text("•").foregroundStyle(accent.opacity(0.7))
-                        Text(option).foregroundStyle(.white.opacity(0.7))
-                    }
-                    .font(.system(size: 10, design: .monospaced))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        Button { store.jumpToHostToAnswer(sessionID: session.id) } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "arrowshape.turn.up.right.fill")
-                    .font(.system(size: 10))
-                Text("Answer in \(session.terminal)")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            }
-            .foregroundStyle(.black)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(accent))
-        }
-        .buttonStyle(.plain)
-
-        Text("This session's questions are answered in \(session.terminal), not the notch.")
-            .font(.system(size: 8, weight: .medium, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.4))
     }
 
     @ViewBuilder
