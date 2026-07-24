@@ -61,7 +61,7 @@ final class AppSettings: ObservableObject {
 
     // MARK: Sound
     @Published var soundEnabled: Bool {
-        didSet { d.set(soundEnabled, forKey: Key.soundEnabled); applyMuting() }
+        didSet { d.set(soundEnabled, forKey: Key.soundEnabled); applyMuting(); clearMuteIfReenabled() }
     }
     /// 0…1; scales the synthesized chiptune amplitude (see `SoundPlayer`).
     @Published var soundVolume: Double {
@@ -77,7 +77,7 @@ final class AppSettings: ObservableObject {
     /// Master switch for spoken callouts. Off by default (opt-in), like the competitor's
     /// auto-play. When on, `applyMuting` still gates it by quiet scenes.
     @Published var voiceEnabled: Bool {
-        didSet { d.set(voiceEnabled, forKey: Key.voiceEnabled); applyMuting() }
+        didSet { d.set(voiceEnabled, forKey: Key.voiceEnabled); applyMuting(); clearMuteIfReenabled() }
     }
     /// Which engine speaks. `.system` is on-device and fully local; the others are opt-in
     /// bring-your-own-key cloud providers (see `VoiceProvider`).
@@ -133,6 +133,44 @@ final class AppSettings: ObservableObject {
     // MARK: Notifications
     @Published var notificationsEnabled: Bool {
         didSet { d.set(notificationsEnabled, forKey: Key.notificationsEnabled); applyMuting() }
+    }
+
+    // MARK: Quick mute
+    /// One-tap mute from the island for both sound alerts and voice callouts. It's a
+    /// convenience over `soundEnabled`/`voiceEnabled`: muting snapshots their current
+    /// state and turns both off; unmuting restores exactly what was on before, so the
+    /// individual preferences aren't lost. Persisted so a mute survives relaunch.
+    @Published private(set) var isMuted: Bool {
+        didSet { d.set(isMuted, forKey: Key.isMuted) }
+    }
+    /// Snapshot of the enabled states captured at mute time, restored on unmute.
+    private var preMuteSoundEnabled: Bool {
+        didSet { d.set(preMuteSoundEnabled, forKey: Key.preMuteSoundEnabled) }
+    }
+    private var preMuteVoiceEnabled: Bool {
+        didSet { d.set(preMuteVoiceEnabled, forKey: Key.preMuteVoiceEnabled) }
+    }
+
+    /// Toggle the quick mute. Muting remembers the current sound/voice switches and turns
+    /// both off; unmuting restores them.
+    func setMuted(_ muted: Bool) {
+        guard muted != isMuted else { return }
+        if muted {
+            preMuteSoundEnabled = soundEnabled
+            preMuteVoiceEnabled = voiceEnabled
+            soundEnabled = false
+            voiceEnabled = false
+        } else {
+            soundEnabled = preMuteSoundEnabled
+            voiceEnabled = preMuteVoiceEnabled
+        }
+        isMuted = muted
+    }
+
+    /// Keep the mute flag honest: if either switch is turned back on individually (e.g. from
+    /// the gear menu) while muted, the island is no longer fully silenced, so drop the flag.
+    private func clearMuteIfReenabled() {
+        if isMuted && (soundEnabled || voiceEnabled) { isMuted = false }
     }
 
     // MARK: Quiet scenes
@@ -292,6 +330,9 @@ final class AppSettings: ObservableObject {
         static let voiceAnnounceOnAttention = "voiceAnnounceOnAttention"
         static let voiceCloudVoice = "voiceCloudVoice"
         static let notificationsEnabled = "notificationsEnabled"
+        static let isMuted = "isMuted"
+        static let preMuteSoundEnabled = "preMuteSoundEnabled"
+        static let preMuteVoiceEnabled = "preMuteVoiceEnabled"
         static let quietScenesEnabled = "quietScenesEnabled"
         static let quietDuringFocus = "quietDuringFocus"
         static let quietWhenLocked = "quietWhenLocked"
@@ -338,6 +379,9 @@ final class AppSettings: ObservableObject {
             Key.voiceAnnounceOnAttention: false,
             Key.voiceCloudVoice: "",
             Key.notificationsEnabled: true,
+            Key.isMuted: false,
+            Key.preMuteSoundEnabled: true,
+            Key.preMuteVoiceEnabled: false,
             Key.quietScenesEnabled: true,
             Key.quietDuringFocus: true,
             Key.quietWhenLocked: true,
@@ -382,6 +426,9 @@ final class AppSettings: ObservableObject {
         elevenLabsKey = Keychain.get(Keychain.Account.elevenLabsKey) ?? ""
         anthropicKey = Keychain.get(Keychain.Account.anthropicKey) ?? ""
         notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
+        isMuted = d.bool(forKey: Key.isMuted)
+        preMuteSoundEnabled = d.bool(forKey: Key.preMuteSoundEnabled)
+        preMuteVoiceEnabled = d.bool(forKey: Key.preMuteVoiceEnabled)
         quietScenesEnabled = d.bool(forKey: Key.quietScenesEnabled)
         quietDuringFocus = d.bool(forKey: Key.quietDuringFocus)
         quietWhenLocked = d.bool(forKey: Key.quietWhenLocked)
