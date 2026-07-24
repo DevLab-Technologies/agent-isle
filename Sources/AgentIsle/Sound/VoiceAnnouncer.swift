@@ -190,26 +190,30 @@ final class VoiceAnnouncer: NSObject {
 
     // MARK: - Voice selection
 
-    /// Installed English voices, best quality first, in a stable order (so the per-agent
-    /// mapping is deterministic across launches). Computed once.
-    private lazy var englishVoices: [AVSpeechSynthesisVoice] = {
-        AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix("en") }
-            .sorted { a, b in
-                a.quality.rawValue != b.quality.rawValue
-                    ? a.quality.rawValue > b.quality.rawValue
-                    : a.identifier < b.identifier
-            }
-    }()
+    /// Natural-sounding installed voices, best first (see `SystemVoiceCatalog`). Computed once;
+    /// used both as the auto-distinct pool and as the automatic fallback.
+    private lazy var naturalVoices: [AVSpeechSynthesisVoice] = SystemVoiceCatalog.naturalVoices()
 
-    /// A distinct-but-stable voice per agent, or the system default when the option is off or
-    /// no voices are installed.
+    /// Resolve the on-device voice for `agent`, in priority order:
+    ///   1. an explicit per-agent choice the user picked,
+    ///   2. an auto-assigned distinct voice (when that option is on),
+    ///   3. the user's chosen default voice,
+    ///   4. the single best natural voice — and only then the system language default.
+    /// A stored identifier that is no longer installed resolves to nil and falls through.
     private func localVoice(for agent: AgentKind) -> AVSpeechSynthesisVoice? {
-        guard config.distinctVoicePerAgent, !englishVoices.isEmpty else {
-            return AVSpeechSynthesisVoice(language: Locale.preferredLanguages.first ?? "en-US")
+        if let id = config.perAgentVoice[agent.rawValue], !id.isEmpty,
+           let voice = AVSpeechSynthesisVoice(identifier: id) {
+            return voice
         }
-        let idx = stableIndex(agent.rawValue, count: englishVoices.count)
-        return englishVoices[idx]
+        let pool = naturalVoices
+        if config.distinctVoicePerAgent, pool.count > 1 {
+            return pool[stableIndex(agent.rawValue, count: pool.count)]
+        }
+        if !config.defaultVoiceId.isEmpty,
+           let voice = AVSpeechSynthesisVoice(identifier: config.defaultVoiceId) {
+            return voice
+        }
+        return pool.first ?? AVSpeechSynthesisVoice(language: Locale.preferredLanguages.first ?? "en-US")
     }
 
     // MARK: - Helpers
@@ -259,5 +263,63 @@ extension VoiceAnnouncer: AVAudioPlayerDelegate {
 
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         Task { @MainActor [weak self] in self?.finishPlayback() }
+    }
+}
+
+// MARK: - System voice catalog
+
+/// One selectable on-device voice, for the settings pickers.
+struct SystemVoiceOption: Identifiable, Hashable {
+    /// `AVSpeechSynthesisVoice.identifier`, persisted so a choice survives relaunches.
+    let id: String
+    /// Human label, e.g. "Samantha — US" or "Zoe — US · Premium".
+    let label: String
+}
+
+/// The curated list of natural on-device voices, shared by `VoiceAnnouncer` (as its pool and
+/// fallback) and the settings pickers so both agree on exactly which voices are offered.
+///
+/// The system ships a pile of robotic joke voices (Zarvox, Bells, Bad News, Trinoids…) and the
+/// dated DECtalk-style Eloquence set alongside the modern natural voices. All report `.default`
+/// quality, so a plain quality sort can't separate them — offering the whole list is what made
+/// callouts sound terrible. We keep only the natural voices, and any Enhanced/Premium voice the
+/// user has downloaded floats to the top since it genuinely sounds best.
+enum SystemVoiceCatalog {
+    /// Excludes the novelty voices (`…speech.synthesis.voice.*`, e.g. Zarvox, Fred, Albert) and
+    /// the old robotic Eloquence set (`…eloquence.*`), keeping the modern natural voices
+    /// (`com.apple.voice.*`, Siri) plus anything already at Enhanced/Premium quality.
+    static func isNatural(_ voice: AVSpeechSynthesisVoice) -> Bool {
+        if voice.quality != .default { return true }
+        let id = voice.identifier
+        return !id.contains(".speech.synthesis.voice.") && !id.contains(".eloquence.")
+    }
+
+    /// Installed English natural voices, best quality first, in a stable order.
+    static func naturalVoices() -> [AVSpeechSynthesisVoice] {
+        let english = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+        let natural = english.filter(isNatural)
+        // Never end up with nothing: if the user somehow has only novelty voices, use them all.
+        return (natural.isEmpty ? english : natural).sorted { a, b in
+            a.quality.rawValue != b.quality.rawValue
+                ? a.quality.rawValue > b.quality.rawValue
+                : a.identifier < b.identifier
+        }
+    }
+
+    /// The picker options for the natural voices.
+    static func options() -> [SystemVoiceOption] {
+        naturalVoices().map { SystemVoiceOption(id: $0.identifier, label: label(for: $0)) }
+    }
+
+    /// "Samantha — US", or "Zoe — US · Enhanced" when the voice is a downloaded higher tier.
+    static func label(for voice: AVSpeechSynthesisVoice) -> String {
+        let region = voice.language.split(separator: "-").last.map(String.init) ?? voice.language
+        var label = "\(voice.name) — \(region)"
+        switch voice.quality {
+        case .premium:  label += " · Premium"
+        case .enhanced: label += " · Enhanced"
+        default:        break
+        }
+        return label
     }
 }
