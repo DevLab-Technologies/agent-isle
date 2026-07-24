@@ -5,6 +5,12 @@ import SwiftUI
 struct VoiceSettings: View {
     @EnvironmentObject var settings: AppSettings
 
+    /// The curated natural on-device voices. Enumerated once per launch (statics are lazy) so
+    /// re-rendering the pickers doesn't re-scan the installed voices.
+    private static let systemVoiceOptions = SystemVoiceCatalog.options()
+    /// Agents worth offering a dedicated voice for (everything but the catch-all "unknown").
+    private let agents = AgentKind.allCases.filter { $0 != .unknown }
+
     // Which key fields are relevant to the currently selected providers.
     private var needsOpenAIKey: Bool {
         settings.voiceProvider == .openAI || settings.voiceSummaryProvider == .openAI
@@ -13,11 +19,50 @@ struct VoiceSettings: View {
     private var needsAnthropicKey: Bool { settings.voiceSummaryProvider == .anthropic }
     private var anyCloud: Bool { needsOpenAIKey || needsElevenLabsKey || needsAnthropicKey }
 
+    /// True for engines with a known, selectable list of voices (a picker fits). ElevenLabs
+    /// voices are account-specific, so it keeps a free-text id field instead.
+    private var offersVoicePicker: Bool {
+        settings.voiceProvider == .system || settings.voiceProvider == .openAI
+    }
+
+    /// The selectable voices ("characters") for the current engine.
+    private var engineVoiceOptions: [SystemVoiceOption] {
+        switch settings.voiceProvider {
+        case .system:     return Self.systemVoiceOptions
+        case .openAI:     return SpeechClient.openAIVoices.map { SystemVoiceOption(id: $0, label: $0.capitalized) }
+        case .elevenLabs: return SpeechClient.elevenLabsPresets.map { SystemVoiceOption(id: $0.id, label: $0.name) }
+        }
+    }
+
+    /// The store binding for the current engine's default voice.
+    private var defaultVoiceBinding: Binding<String> {
+        settings.voiceProvider == .system ? $settings.voiceDefaultVoiceId : $settings.voiceCloudVoice
+    }
+
+    /// The store binding for one agent's explicit voice under the current engine ("" = Default).
+    private func agentVoiceBinding(_ agent: AgentKind) -> Binding<String> {
+        Binding(
+            get: {
+                settings.voiceProvider == .system
+                    ? (settings.voicePerAgent[agent.rawValue] ?? "")
+                    : (settings.voiceCloudPerAgent[VoiceConfig.cloudKey(settings.voiceProvider, agent)] ?? "")
+            },
+            set: { value in
+                let voice = value.isEmpty ? nil : value
+                if settings.voiceProvider == .system {
+                    settings.setVoice(voice, for: agent)
+                } else {
+                    settings.setCloudVoice(voice, for: agent, provider: settings.voiceProvider)
+                }
+            })
+    }
+
     var body: some View {
         SettingsScaffold(section: .voice) {
             output
             whenToSpeak
             voiceGroup
+            if offersVoicePicker { perAgentGroup }
             summaryGroup
             if anyCloud { keysGroup }
         }
@@ -72,7 +117,7 @@ struct VoiceSettings: View {
 
     private var voiceGroup: some View {
         SettingsGroup(title: "Voice",
-                      footnote: "System voice is fully on-device — nothing leaves your Mac. OpenAI and ElevenLabs speak using your own API key and bill you directly.") {
+                      footnote: "System voice is fully on-device — nothing leaves your Mac. For a far more natural voice, download an Enhanced or Premium one in System Settings ▸ Accessibility ▸ Spoken Content ▸ System Voice ▸ Manage Voices. OpenAI and ElevenLabs speak using your own API key and bill you directly.") {
             SettingsRow(title: "Engine") {
                 Picker("", selection: $settings.voiceProvider) {
                     ForEach(VoiceProvider.allCases) { Text($0.title).tag($0) }
@@ -85,12 +130,25 @@ struct VoiceSettings: View {
                 }
                 .labelsHidden().pickerStyle(.menu).frame(width: 200)
             }
+            if offersVoicePicker {
+                SettingsRow(title: "Default Voice",
+                            subtitle: settings.voiceDistinctPerAgent
+                                ? "Used only when Distinct Voice Per Agent is off, or as the fallback."
+                                : "Spoken for every agent that has no voice set below.") {
+                    Picker("", selection: defaultVoiceBinding) {
+                        Text("Automatic (best available)").tag("")
+                        ForEach(engineVoiceOptions) { Text($0.label).tag($0.id) }
+                    }
+                    .labelsHidden().pickerStyle(.menu).frame(width: 220)
+                    .disabled(settings.voiceDistinctPerAgent)
+                }
+            }
             SettingsRow(title: "Distinct Voice Per Agent",
-                        subtitle: "Give Claude, Codex, Cursor, and the rest their own voice.",
-                        showsDivider: settings.voiceProvider.isCloud) {
+                        subtitle: "Auto-assign a different voice to each agent that isn't set below.",
+                        showsDivider: settings.voiceProvider == .elevenLabs) {
                 Toggle("", isOn: $settings.voiceDistinctPerAgent).labelsHidden().toggleStyle(.switch)
             }
-            if settings.voiceProvider.isCloud {
+            if settings.voiceProvider == .elevenLabs {
                 SettingsRow(title: "Voice",
                             subtitle: cloudVoiceHint,
                             showsDivider: false) {
@@ -101,14 +159,37 @@ struct VoiceSettings: View {
         }
     }
 
+    // MARK: Per-agent voices
+
+    private var perAgentGroup: some View {
+        SettingsGroup(title: "Per-Agent Voices",
+                      footnote: "Give any agent its own voice. Leave one on Default to follow the settings above. Tap play to preview.") {
+            ForEach(Array(agents.enumerated()), id: \.element) { idx, agent in
+                SettingsRow(title: agent.displayName,
+                            showsDivider: idx < agents.count - 1) {
+                    HStack(spacing: 8) {
+                        Button { VoiceAnnouncer.shared.preview(agent: agent) } label: {
+                            Image(systemName: "play.circle.fill").foregroundStyle(.green)
+                                .font(.system(size: 15))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Preview \(agent.displayName)")
+
+                        Picker("", selection: agentVoiceBinding(agent)) {
+                            Text("Default").tag("")
+                            ForEach(engineVoiceOptions) { Text($0.label).tag($0.id) }
+                        }
+                        .labelsHidden().pickerStyle(.menu).frame(width: 220)
+                    }
+                }
+            }
+        }
+    }
+
     private var cloudVoiceHint: String {
-        settings.voiceProvider == .openAI
-            ? "OpenAI voice name. Leave blank to auto-pick per agent."
-            : "ElevenLabs voice id. Leave blank for the default voice."
+        "ElevenLabs voice id. Leave blank to use a premade voice — varied per agent when Distinct is on."
     }
-    private var cloudVoicePlaceholder: String {
-        settings.voiceProvider == .openAI ? "nova" : "voice id"
-    }
+    private var cloudVoicePlaceholder: String { "voice id" }
 
     // MARK: Summary
 

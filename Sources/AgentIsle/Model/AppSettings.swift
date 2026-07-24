@@ -91,9 +91,25 @@ final class AppSettings: ObservableObject {
     @Published var voiceStyle: VoiceStyle {
         didSet { d.set(voiceStyle.rawValue, forKey: Key.voiceStyle); pushVoiceConfig() }
     }
-    /// Give each agent its own stable voice (the competitor's headline touch).
+    /// Auto-assign each agent its own stable voice (for agents with no explicit choice below).
     @Published var voiceDistinctPerAgent: Bool {
         didSet { d.set(voiceDistinctPerAgent, forKey: Key.voiceDistinctPerAgent); pushVoiceConfig() }
+    }
+    /// On-device voice used for every agent by default. An `AVSpeechSynthesisVoice.identifier`,
+    /// or empty for "automatic" (the best installed natural voice).
+    @Published var voiceDefaultVoiceId: String {
+        didSet { d.set(voiceDefaultVoiceId, forKey: Key.voiceDefaultVoiceId); pushVoiceConfig() }
+    }
+    /// Explicit per-agent on-device voice, keyed by `AgentKind.rawValue` → voice identifier.
+    /// An agent absent here follows `voiceDistinctPerAgent` / `voiceDefaultVoiceId`. Persisted
+    /// as a JSON map.
+    @Published var voicePerAgent: [String: String] {
+        didSet { persistPerAgentVoices(); pushVoiceConfig() }
+    }
+    /// Explicit per-agent cloud voice, keyed by `VoiceConfig.cloudKey(provider, agent)` → voice
+    /// name/id. Kept separate from the on-device map since the identifiers are unrelated.
+    @Published var voiceCloudPerAgent: [String: String] {
+        didSet { persistCloudPerAgentVoices(); pushVoiceConfig() }
     }
     @Published var voiceVolume: Double {
         didSet { d.set(voiceVolume, forKey: Key.voiceVolume); pushVoiceConfig() }
@@ -287,6 +303,9 @@ final class AppSettings: ObservableObject {
         static let voiceSummaryProvider = "voiceSummaryProvider"
         static let voiceStyle = "voiceStyle"
         static let voiceDistinctPerAgent = "voiceDistinctPerAgent"
+        static let voiceDefaultVoiceId = "voiceDefaultVoiceId"
+        static let voicePerAgent = "voicePerAgentVoices"
+        static let voiceCloudPerAgent = "voiceCloudPerAgentVoices"
         static let voiceVolume = "voiceVolume"
         static let voiceAnnounceOnDone = "voiceAnnounceOnDone"
         static let voiceAnnounceOnAttention = "voiceAnnounceOnAttention"
@@ -333,6 +352,7 @@ final class AppSettings: ObservableObject {
             Key.voiceSummaryProvider: SummaryProvider.heuristic.rawValue,
             Key.voiceStyle: VoiceStyle.standard.rawValue,
             Key.voiceDistinctPerAgent: true,
+            Key.voiceDefaultVoiceId: "",
             Key.voiceVolume: 0.9,
             Key.voiceAnnounceOnDone: true,
             Key.voiceAnnounceOnAttention: false,
@@ -374,6 +394,9 @@ final class AppSettings: ObservableObject {
         voiceSummaryProvider = SummaryProvider(rawValue: d.string(forKey: Key.voiceSummaryProvider) ?? "") ?? .heuristic
         voiceStyle = VoiceStyle(rawValue: d.string(forKey: Key.voiceStyle) ?? "") ?? .standard
         voiceDistinctPerAgent = d.bool(forKey: Key.voiceDistinctPerAgent)
+        voiceDefaultVoiceId = d.string(forKey: Key.voiceDefaultVoiceId) ?? ""
+        voicePerAgent = AppSettings.loadVoiceMap(from: d, key: Key.voicePerAgent)
+        voiceCloudPerAgent = AppSettings.loadVoiceMap(from: d, key: Key.voiceCloudPerAgent)
         voiceVolume = d.double(forKey: Key.voiceVolume)
         voiceAnnounceOnDone = d.bool(forKey: Key.voiceAnnounceOnDone)
         voiceAnnounceOnAttention = d.bool(forKey: Key.voiceAnnounceOnAttention)
@@ -493,6 +516,9 @@ final class AppSettings: ObservableObject {
         config.summaryProvider = voiceSummaryProvider
         config.style = voiceStyle
         config.distinctVoicePerAgent = voiceDistinctPerAgent
+        config.defaultVoiceId = voiceDefaultVoiceId
+        config.perAgentVoice = voicePerAgent
+        config.cloudVoicePerAgent = voiceCloudPerAgent
         config.volume = voiceVolume
         config.announceOnDone = voiceAnnounceOnDone
         config.announceOnAttention = voiceAnnounceOnAttention
@@ -535,6 +561,42 @@ final class AppSettings: ObservableObject {
         var pack = soundPack
         pack.set(url, for: event)
         soundPack = pack
+    }
+
+    // MARK: - Per-agent voices
+
+    /// Set an agent's explicit on-device voice, or clear it (fall back to distinct/default) with
+    /// `nil`. Triggers the `voicePerAgent` didSet to persist and push.
+    func setVoice(_ voiceId: String?, for agent: AgentKind) {
+        voicePerAgent = Self.updating(voicePerAgent, key: agent.rawValue, value: voiceId)
+    }
+
+    /// Set an agent's explicit cloud voice under `provider` (namespaced so OpenAI and ElevenLabs
+    /// stay separate), or clear it with `nil`.
+    func setCloudVoice(_ voice: String?, for agent: AgentKind, provider: VoiceProvider) {
+        let key = VoiceConfig.cloudKey(provider, agent)
+        voiceCloudPerAgent = Self.updating(voiceCloudPerAgent, key: key, value: voice)
+    }
+
+    private static func updating(_ map: [String: String], key: String, value: String?) -> [String: String] {
+        var copy = map
+        if let value, !value.isEmpty { copy[key] = value } else { copy.removeValue(forKey: key) }
+        return copy
+    }
+
+    private func persistPerAgentVoices() { persist(voicePerAgent, forKey: Key.voicePerAgent) }
+    private func persistCloudPerAgentVoices() { persist(voiceCloudPerAgent, forKey: Key.voiceCloudPerAgent) }
+
+    private func persist(_ map: [String: String], forKey key: String) {
+        if let data = try? JSONEncoder().encode(map) { d.set(data, forKey: key) }
+    }
+
+    private static func loadVoiceMap(from d: UserDefaults, key: String) -> [String: String] {
+        guard let data = d.data(forKey: key),
+              let map = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return map
     }
 
     private func persistSoundPack() {

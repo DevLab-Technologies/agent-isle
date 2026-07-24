@@ -101,15 +101,39 @@ struct VoiceConfig {
     var provider: VoiceProvider = .system
     var summaryProvider: SummaryProvider = .heuristic
     var style: VoiceStyle = .standard
+    /// Auto-assign a distinct on-device voice to each agent that has no explicit choice in
+    /// `perAgentVoice`. When off, those agents fall back to `defaultVoiceId`.
     var distinctVoicePerAgent = true
     var volume: Double = 0.9
     var announceOnDone = true
     var announceOnAttention = false
     /// OpenAI voice name (e.g. "nova") or ElevenLabs voice id. Empty uses a sensible default.
     var cloudVoice = ""
+    /// On-device voice used for every agent by default. An `AVSpeechSynthesisVoice.identifier`,
+    /// or empty for "automatic" (the best installed natural voice).
+    var defaultVoiceId = ""
+    /// Explicit on-device voice per agent, keyed by `AgentKind.rawValue` → voice identifier.
+    /// An agent absent here (or mapped to empty) follows the distinct/default resolution above.
+    var perAgentVoice: [String: String] = [:]
+    /// Explicit cloud voice per agent, keyed by `cloudKey(provider, agent)` so an OpenAI choice
+    /// never leaks into ElevenLabs (their voice identifiers are unrelated). Value is an OpenAI
+    /// voice name or an ElevenLabs voice id; absent/empty follows the distinct/default resolution.
+    var cloudVoicePerAgent: [String: String] = [:]
 
     func shouldAnnounce(_ kind: VoiceEventKind) -> Bool {
         kind.isAttention ? announceOnAttention : announceOnDone
+    }
+
+    /// Namespaced key for a per-agent cloud voice, so the two cloud engines keep separate maps.
+    static func cloudKey(_ provider: VoiceProvider, _ agent: AgentKind) -> String {
+        "\(provider.rawValue)/\(agent.rawValue)"
+    }
+
+    /// The explicit cloud voice pinned for `agent` under the current provider, or nil to fall
+    /// through to the distinct/default resolution.
+    func cloudVoiceForAgent(_ agent: AgentKind) -> String? {
+        let value = cloudVoicePerAgent[Self.cloudKey(provider, agent)]
+        return (value?.isEmpty == false) ? value : nil
     }
 }
 

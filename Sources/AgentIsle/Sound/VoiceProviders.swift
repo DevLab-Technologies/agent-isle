@@ -20,25 +20,39 @@ enum VoiceError: LocalizedError {
 /// for `AVAudioPlayer`. Only ever reached when the user has opted into a cloud provider and
 /// supplied their own key — this is the only code path that sends text off the machine.
 enum SpeechClient {
-    /// OpenAI's fixed set of built-in voices, used to give each agent a distinct voice when the
-    /// user hasn't pinned one explicitly.
-    private static let openAIVoices = ["alloy", "ash", "ballad", "coral", "echo",
-                                       "fable", "nova", "onyx", "sage", "shimmer"]
-    /// ElevenLabs' "Rachel" — a stable default public voice when the user hasn't supplied a id.
+    /// OpenAI's fixed set of built-in voices. Also the picker's "available characters" for the
+    /// OpenAI engine, and the pool for the distinct-per-agent auto-assignment.
+    static let openAIVoices = ["alloy", "ash", "ballad", "coral", "echo",
+                               "fable", "nova", "onyx", "sage", "shimmer"]
+    /// ElevenLabs' stable public premade voices (id → name). "Rachel" is the default.
+    static let elevenLabsPresets: [(id: String, name: String)] = [
+        ("21m00Tcm4TlvDq8ikWAM", "Rachel"),
+        ("AZnzlk1XvdvUeBnXmlld", "Domi"),
+        ("EXAVITQu4vr4xnSDxMaL", "Bella"),
+        ("ErXwobaYiN019PkySvjV", "Antoni"),
+        ("MF3mGyEYCl7XYWbV9V6O", "Elli"),
+        ("TxGEqnHWrfWFTfGW9XjX", "Josh"),
+        ("VR6AewLTigWG4xSOukaG", "Arnold"),
+        ("pNInz6obpgDQGcFmaJgB", "Adam"),
+        ("yoZ06aMxZJJ28mfd3POQ", "Sam"),
+    ]
+    /// ElevenLabs' "Rachel" — the fallback when nothing else resolves.
     private static let elevenLabsDefaultVoice = "21m00Tcm4TlvDq8ikWAM"
 
     static func synthesize(text: String, agent: AgentKind, config: VoiceConfig, key: String) async throws -> Data {
         switch config.provider {
         case .openAI:     return try await openAI(text: text, agent: agent, config: config, key: key)
-        case .elevenLabs: return try await elevenLabs(text: text, config: config, key: key)
+        case .elevenLabs: return try await elevenLabs(text: text, agent: agent, config: config, key: key)
         case .system:     throw VoiceError.badResponse   // not a cloud provider
         }
     }
 
     private static func openAI(text: String, agent: AgentKind, config: VoiceConfig, key: String) async throws -> Data {
-        let voice = config.cloudVoice.isEmpty
-            ? (config.distinctVoicePerAgent ? openAIVoices[stableIndex(agent.rawValue, count: openAIVoices.count)] : "nova")
-            : config.cloudVoice
+        // Same precedence as the on-device voice: explicit per-agent → distinct auto → default.
+        let voice = config.cloudVoiceForAgent(agent)
+            ?? (config.distinctVoicePerAgent
+                ? openAIVoices[stableIndex(agent.rawValue, count: openAIVoices.count)]
+                : (config.cloudVoice.isEmpty ? "nova" : config.cloudVoice))
         var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/speech")!)
         req.httpMethod = "POST"
         req.timeoutInterval = 20
@@ -55,8 +69,11 @@ enum SpeechClient {
         return try await audioBytes(for: req)
     }
 
-    private static func elevenLabs(text: String, config: VoiceConfig, key: String) async throws -> Data {
-        let voiceID = config.cloudVoice.isEmpty ? elevenLabsDefaultVoice : config.cloudVoice
+    private static func elevenLabs(text: String, agent: AgentKind, config: VoiceConfig, key: String) async throws -> Data {
+        let voiceID = config.cloudVoiceForAgent(agent)
+            ?? (config.distinctVoicePerAgent
+                ? elevenLabsPresets[stableIndex(agent.rawValue, count: elevenLabsPresets.count)].id
+                : (config.cloudVoice.isEmpty ? elevenLabsDefaultVoice : config.cloudVoice))
         // The voice id goes into the URL path; a user-entered value may contain characters that
         // make `URL(string:)` fail. Encode it, and throw (fall back to on-device) instead of
         // force-unwrapping nil and crashing.
