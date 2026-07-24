@@ -44,6 +44,20 @@ enum Jumper {
         "com.exafunction.windsurf": "windsurf",
     ]
 
+    /// The bundle id `jump(to:)` will bring frontmost, when we can predict it. Callers that
+    /// must act only once the app is focused (e.g. synthesizing keystrokes) poll the frontmost
+    /// app against this. Returns nil when the jump goes through a path whose resulting app we
+    /// can't name up front (a user open-URL rule), so those callers fall back to a settle delay.
+    static func targetBundleID(for session: AgentSession) -> String? {
+        if let rule = JumpRule.firstMatch(for: session, in: .standard) {
+            switch rule.strategy {
+            case .activateBundle: return rule.activationBundleID
+            case .openURL:        return nil
+            }
+        }
+        return session.terminalBundleID ?? bundleIDs[session.terminal]
+    }
+
     static func jump(to session: AgentSession) {
         // User rules win: if one matches and can act, honor it and stop.
         if let rule = JumpRule.firstMatch(for: session, in: .standard),

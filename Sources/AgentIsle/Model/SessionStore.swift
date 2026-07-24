@@ -391,6 +391,19 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// A transcript-detected question can't be answered from the notch: its host (the VS Code
+    /// extension / Claude Desktop) renders `AskUserQuestion` as a picker in its own UI, and
+    /// synthetic keystrokes can't select an option there. So focus the host session and let the
+    /// user answer it in place. We deliberately leave the card up (no optimistic clear, no
+    /// answered-marker) — the poller removes it once the transcript advances past the question,
+    /// so a not-yet-answered prompt never silently disappears.
+    func jumpToHostToAnswer(sessionID: UUID) {
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        Jumper.jump(to: session)
+        SoundPlayer.shared.play(.select)
+        update(id: sessionID) { $0.lastMessage = "Answer in \($0.terminal)" }
+    }
+
     // MARK: - Plan review
 
     /// Approve the plan the agent presented — let it proceed as written.

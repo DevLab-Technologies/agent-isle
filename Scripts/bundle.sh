@@ -42,14 +42,22 @@ cp "$ROOT/Scripts/agent-isle-cursor-hook.py" "$CONTENTS/Resources/agent-isle-cur
 
 # Quoted heredoc (no shell interpolation) — the version is stamped in afterward via
 # PlistBuddy so nothing in the plist can be accidentally expanded by the shell.
+#
+# NOTE: this local bundle uses a DISTINCT bundle id (`.dev`) from the shipped release
+# (`com.devlab.agentisle`, set by release.sh). macOS keys TCC permission grants — especially
+# Accessibility, which the keystroke delivery path needs — on bundle id + code identity. This
+# build is ad-hoc signed, so its identity changes every rebuild; if it shared the release's
+# bundle id it would overwrite the release's Accessibility grant, leaving the installed
+# release "not trusted" and re-prompting even though it was granted. A separate id keeps the
+# two grants independent so a dev build never breaks the installed app (and vice versa).
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Agent Isle</string>
-  <key>CFBundleDisplayName</key><string>Agent Isle</string>
-  <key>CFBundleIdentifier</key><string>com.devlab.agentisle</string>
+  <key>CFBundleName</key><string>Agent Isle (dev)</string>
+  <key>CFBundleDisplayName</key><string>Agent Isle (dev)</string>
+  <key>CFBundleIdentifier</key><string>com.devlab.agentisle.dev</string>
   <key>CFBundleExecutable</key><string>AgentIsle</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleVersion</key><string>0.0</string>

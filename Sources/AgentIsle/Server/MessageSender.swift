@@ -12,13 +12,16 @@ import ApplicationServices
 enum MessageSender {
     enum SendError: Error {
         case accessibilityDenied
+        case couldNotFocus(String)
         case scriptFailed(String)
 
         /// A short, user-facing explanation shown under the input bar.
         var userMessage: String {
             switch self {
             case .accessibilityDenied:
-                return "Grant Accessibility access to Agent Isle in System Settings › Privacy, then try again."
+                return "Grant Accessibility to Agent Isle in System Settings › Privacy. If it already looks enabled, remove it there, re-add this copy, and relaunch."
+            case .couldNotFocus(let app):
+                return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
             case .scriptFailed(let detail):
                 return "Couldn't send: \(detail)"
             }
@@ -112,13 +115,46 @@ enum MessageSender {
             completion(.failure(.accessibilityDenied))
             return
         }
-        // Bring the session's terminal forward, then type once it's frontmost.
+        // Bring the session's app forward, then type only once it is actually frontmost.
+        // A fixed delay races the async activation (`NSWorkspace.openApplication` returns
+        // before the app is front), so keystrokes could land in whatever app happened to
+        // have focus — the answer would silently go nowhere while we reported success.
+        // Waiting for real focus, and failing if it never comes, keeps "sent" honest.
         Jumper.jump(to: session)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        waitUntilFrontmost(Jumper.targetBundleID(for: session)) { focused in
+            guard focused else {
+                completion(.failure(.couldNotFocus(session.terminal)))
+                return
+            }
             typeString(text)
             pressReturn()
             completion(.success(()))
         }
+    }
+
+    /// Poll until the app with `bundleID` is frontmost — async activation makes any fixed
+    /// delay unreliable. Calls back with `true` once it's front (after a short beat so it can
+    /// focus its input field), or `false` if it isn't within `timeout`. When the target bundle
+    /// is unknown (an open-URL jump rule) we can't verify focus, so fall back to a short
+    /// settle delay and assume it landed.
+    private static func waitUntilFrontmost(_ bundleID: String?,
+                                           timeout: TimeInterval = 1.5,
+                                           completion: @escaping (Bool) -> Void) {
+        guard let bundleID else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { completion(true) }
+            return
+        }
+        let start = Date()
+        func poll() {
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { completion(true) }
+            } else if Date().timeIntervalSince(start) >= timeout {
+                completion(false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
+            }
+        }
+        poll()
     }
 
     /// Returns true if we may post synthetic events; otherwise triggers the one-time

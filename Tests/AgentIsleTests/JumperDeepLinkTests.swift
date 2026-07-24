@@ -26,4 +26,30 @@ final class JumperDeepLinkTests: XCTestCase {
         let url = URL(fileURLWithPath: "/Users/me/.grok/sessions/history.json")
         XCTAssertNil(Jumper.claudeResumeURL(for: session(transcriptURL: url)))
     }
+
+    // MARK: - targetBundleID (the app keystroke delivery waits to become frontmost)
+
+    private func session(terminal: String, bundle: String?) -> AgentSession {
+        AgentSession(agent: .claude, title: "t", terminal: terminal,
+                     lastMessage: "", status: .working, terminalBundleID: bundle)
+    }
+
+    func testTargetBundlePrefersHookReportedBundle() {
+        // The hook's exact TERM_PROGRAM bundle wins over the label lookup.
+        let s = session(terminal: "VS Code", bundle: "com.microsoft.VSCodeInsiders")
+        XCTAssertEqual(Jumper.targetBundleID(for: s), "com.microsoft.VSCodeInsiders")
+    }
+
+    func testTargetBundleFallsBackToLabelMap() {
+        // A transcript-only session carries no bundle id, so the terminal label resolves it.
+        XCTAssertEqual(Jumper.targetBundleID(for: session(terminal: "VS Code", bundle: nil)),
+                       "com.microsoft.VSCode")
+        XCTAssertEqual(Jumper.targetBundleID(for: session(terminal: "Ghostty", bundle: nil)),
+                       "com.mitchellh.ghostty")
+    }
+
+    func testTargetBundleNilForUnknownLabel() {
+        // No bundle and an unrecognized label → can't predict focus; caller settles instead.
+        XCTAssertNil(Jumper.targetBundleID(for: session(terminal: "Mystery", bundle: nil)))
+    }
 }

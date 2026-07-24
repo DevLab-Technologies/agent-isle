@@ -266,6 +266,14 @@ final class AppSettings: ObservableObject {
         set { d.set(newValue, forKey: Key.integrationSetupDone) }
     }
 
+    /// Set once the user declined moving the app into /Applications, so the offer isn't
+    /// repeated every launch. Only applies to a plain out-of-Applications launch — App
+    /// Translocation always re-offers, since permissions can't stick until it's fixed.
+    var relocationPromptSuppressed: Bool {
+        get { d.bool(forKey: Key.relocationPromptSuppressed) }
+        set { d.set(newValue, forKey: Key.relocationPromptSuppressed) }
+    }
+
     // MARK: Session card
     @Published var showTokens: Bool { didSet { d.set(showTokens, forKey: Key.showTokens) } }
     @Published var showTerminal: Bool { didSet { d.set(showTerminal, forKey: Key.showTerminal) } }
@@ -339,6 +347,7 @@ final class AppSettings: ObservableObject {
         static let smartSuppression = "smartSuppression"
         static let autoSetupIntegrations = "autoSetupIntegrations"
         static let integrationSetupDone = "integrationSetupDone"
+        static let relocationPromptSuppressed = "relocationPromptSuppressed"
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
         static let showTasks = "showTasks"
