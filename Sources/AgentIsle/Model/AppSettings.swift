@@ -151,6 +151,15 @@ final class AppSettings: ObservableObject {
         didSet { d.set(notificationsEnabled, forKey: Key.notificationsEnabled); applyMuting() }
     }
 
+    // MARK: Quick mute
+    /// One-tap mute from the island for both sound alerts and voice callouts. This is an
+    /// independent gate layered over `soundEnabled`/`voiceEnabled` (see `applyMuting`) — it
+    /// never mutates those preferences, so the individual switches keep showing the user's
+    /// real choice and simply resume when unmuted. Persisted so a mute survives relaunch.
+    @Published var isMuted: Bool {
+        didSet { d.set(isMuted, forKey: Key.isMuted); applyMuting() }
+    }
+
     // MARK: Quiet scenes
     /// Master toggle: auto-mute sound + notifications during Focus, screen-lock, or
     /// screen-sharing. The per-scene toggles below refine which scenes count.
@@ -311,6 +320,7 @@ final class AppSettings: ObservableObject {
         static let voiceAnnounceOnAttention = "voiceAnnounceOnAttention"
         static let voiceCloudVoice = "voiceCloudVoice"
         static let notificationsEnabled = "notificationsEnabled"
+        static let isMuted = "isMuted"
         static let quietScenesEnabled = "quietScenesEnabled"
         static let quietDuringFocus = "quietDuringFocus"
         static let quietWhenLocked = "quietWhenLocked"
@@ -358,6 +368,7 @@ final class AppSettings: ObservableObject {
             Key.voiceAnnounceOnAttention: false,
             Key.voiceCloudVoice: "",
             Key.notificationsEnabled: true,
+            Key.isMuted: false,
             Key.quietScenesEnabled: true,
             Key.quietDuringFocus: true,
             Key.quietWhenLocked: true,
@@ -405,6 +416,7 @@ final class AppSettings: ObservableObject {
         elevenLabsKey = Keychain.get(Keychain.Account.elevenLabsKey) ?? ""
         anthropicKey = Keychain.get(Keychain.Account.anthropicKey) ?? ""
         notificationsEnabled = d.bool(forKey: Key.notificationsEnabled)
+        isMuted = d.bool(forKey: Key.isMuted)
         quietScenesEnabled = d.bool(forKey: Key.quietScenesEnabled)
         quietDuringFocus = d.bool(forKey: Key.quietDuringFocus)
         quietWhenLocked = d.bool(forKey: Key.quietWhenLocked)
@@ -473,9 +485,12 @@ final class AppSettings: ObservableObject {
     /// and by `QuietScenes` (via `onChange`) whenever a scene starts or ends.
     func applyMuting() {
         let quiet = QuietScenes.shared.isSuppressing
-        SoundPlayer.shared.enabled = soundEnabled && !quiet
+        // The manual mute silences sound + voice on top of quiet-scene suppression, but
+        // leaves banner notifications alone (they're a separate, quieter channel).
+        let silenced = quiet || isMuted
+        SoundPlayer.shared.enabled = soundEnabled && !silenced
         Notifier.shared.enabled = notificationsEnabled && !quiet
-        let voiceOn = voiceEnabled && !quiet
+        let voiceOn = voiceEnabled && !silenced
         let voiceWasOn = VoiceAnnouncer.shared.enabled
         VoiceAnnouncer.shared.enabled = voiceOn
         // Cut any in-flight callout only on the on→off transition (voice disabled or a quiet

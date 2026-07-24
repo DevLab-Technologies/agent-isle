@@ -86,6 +86,7 @@ struct ExpandedIsland: View {
                     .font(Theme.Font.label(10))
                     .foregroundStyle(Theme.Ink.tertiary)
                     .lineLimit(1)
+                muteButton
                 settingsMenu
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -124,6 +125,21 @@ struct ExpandedIsland: View {
             .padding(.horizontal, 16).padding(.vertical, 5)
             Divider().overlay(Theme.Fill.hairline)
         }
+    }
+
+    /// One-tap mute for sound alerts and voice callouts, sitting beside the gear so it's
+    /// reachable without opening a menu. Lights up when muted.
+    private var muteButton: some View {
+        Button {
+            settings.isMuted.toggle()
+        } label: {
+            Image(systemName: settings.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(settings.isMuted ? SessionStatus.waiting.color : .white.opacity(0.5))
+        }
+        .buttonStyle(.plain)
+        .help(settings.isMuted ? "Unmute sound & voice" : "Mute sound & voice")
+        .fixedSize()
     }
 
     /// Gear menu — the reliable way to quit and toggle settings, since the menu-bar
