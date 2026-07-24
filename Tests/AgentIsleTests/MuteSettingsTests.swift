@@ -1,9 +1,10 @@
 import XCTest
 @testable import AgentIsle
 
-/// Contracts for the island's one-tap quick mute (`AppSettings.setMuted`): muting turns
-/// both sound and voice off while snapshotting their prior state, unmuting restores exactly
-/// what was on, and re-enabling either switch individually drops the flag.
+/// Contracts for the island's one-tap quick mute (`AppSettings.isMuted`). Mute is an
+/// independent gate: it silences the sound + voice runtime channels without touching the
+/// `soundEnabled`/`voiceEnabled` preferences, and unmuting resumes whatever those prefs say.
+/// Banner notifications are intentionally left on.
 ///
 /// Drives the `AppSettings.shared` singleton (private init), so each test snapshots the
 /// relevant fields up front and restores them in `tearDown` to avoid leaking into the
@@ -14,6 +15,7 @@ final class MuteSettingsTests: XCTestCase {
     private var savedSound = true
     private var savedVoice = false
     private var savedMuted = false
+    private var savedNotifications = true
 
     override func setUp() {
         super.setUp()
@@ -21,90 +23,72 @@ final class MuteSettingsTests: XCTestCase {
         savedSound = s.soundEnabled
         savedVoice = s.voiceEnabled
         savedMuted = s.isMuted
-        // Start every case from a known, unmuted baseline.
-        if s.isMuted { s.setMuted(false) }
+        savedNotifications = s.notificationsEnabled
+        // Start every case from a known, unmuted baseline with all channels on.
+        s.isMuted = false
         s.soundEnabled = true
         s.voiceEnabled = true
+        s.notificationsEnabled = true
     }
 
     override func tearDown() {
         let s = AppSettings.shared
-        if s.isMuted { s.setMuted(false) }
+        s.isMuted = savedMuted
         s.soundEnabled = savedSound
         s.voiceEnabled = savedVoice
-        if s.isMuted != savedMuted { s.setMuted(savedMuted) }
+        s.notificationsEnabled = savedNotifications
         super.tearDown()
     }
 
-    /// Muting silences both switches and flips the flag.
-    func testMuteSilencesSoundAndVoice() {
+    /// Muting silences both runtime channels…
+    func testMuteSilencesSoundAndVoiceChannels() {
         let s = AppSettings.shared
-        s.setMuted(true)
+        s.isMuted = true
         XCTAssertTrue(s.isMuted)
-        XCTAssertFalse(s.soundEnabled)
-        XCTAssertFalse(s.voiceEnabled)
+        XCTAssertFalse(SoundPlayer.shared.enabled)
+        XCTAssertFalse(VoiceAnnouncer.shared.enabled)
     }
 
-    /// Unmuting restores exactly what was on before the mute.
-    func testUnmuteRestoresPriorState() {
+    /// …without mutating the underlying preferences, so the gear-menu toggles keep showing
+    /// the user's real choice.
+    func testMuteLeavesPreferencesUntouched() {
         let s = AppSettings.shared
-        s.soundEnabled = true
-        s.voiceEnabled = false
-        s.setMuted(true)
-        XCTAssertFalse(s.soundEnabled)
-        XCTAssertFalse(s.voiceEnabled)
-
-        s.setMuted(false)
-        XCTAssertFalse(s.isMuted)
-        XCTAssertTrue(s.soundEnabled)   // restored on
-        XCTAssertFalse(s.voiceEnabled)  // restored off
-    }
-
-    /// A mute captured with both switches off restores both to off (not the defaults).
-    func testUnmuteRestoresBothOff() {
-        let s = AppSettings.shared
-        s.soundEnabled = false
-        s.voiceEnabled = false
-        s.setMuted(true)
-        s.setMuted(false)
-        XCTAssertFalse(s.soundEnabled)
-        XCTAssertFalse(s.voiceEnabled)
-    }
-
-    /// Re-enabling sound individually while muted drops the flag (the island is no longer
-    /// fully silenced), leaving the other switch untouched.
-    func testReenablingSoundClearsMute() {
-        let s = AppSettings.shared
-        s.setMuted(true)
-        XCTAssertTrue(s.isMuted)
-
-        s.soundEnabled = true
-        XCTAssertFalse(s.isMuted)
+        s.isMuted = true
         XCTAssertTrue(s.soundEnabled)
-        XCTAssertFalse(s.voiceEnabled)
-    }
-
-    /// Same for re-enabling voice individually.
-    func testReenablingVoiceClearsMute() {
-        let s = AppSettings.shared
-        s.setMuted(true)
-        s.voiceEnabled = true
-        XCTAssertFalse(s.isMuted)
         XCTAssertTrue(s.voiceEnabled)
     }
 
-    /// `setMuted` guards on a no-op transition, so calling it with the current value must not
-    /// re-snapshot and clobber the remembered pre-mute state.
-    func testRedundantMuteDoesNotClobberSnapshot() {
+    /// Unmuting resumes exactly what the preferences say — here sound on, voice off.
+    func testUnmuteResumesFromPreferences() {
         let s = AppSettings.shared
         s.soundEnabled = true
         s.voiceEnabled = false
-        s.setMuted(true)
-        // A second mute-true is a no-op; if it re-snapshotted it would capture the now-false
-        // states and unmute would wrongly restore both to off.
-        s.setMuted(true)
-        s.setMuted(false)
-        XCTAssertTrue(s.soundEnabled)
-        XCTAssertFalse(s.voiceEnabled)
+        s.isMuted = true
+        s.isMuted = false
+
+        XCTAssertFalse(s.isMuted)
+        XCTAssertTrue(SoundPlayer.shared.enabled)    // pref was on → resumes
+        XCTAssertFalse(VoiceAnnouncer.shared.enabled) // pref was off → stays off
+    }
+
+    /// A channel whose preference is off stays off even while muted (mute can only silence,
+    /// never enable), and toggling a preference during a mute doesn't un-silence it.
+    func testTogglingPreferenceWhileMutedStaysSilenced() {
+        let s = AppSettings.shared
+        s.soundEnabled = false
+        s.isMuted = true
+        XCTAssertFalse(SoundPlayer.shared.enabled)
+
+        s.soundEnabled = true            // user flips it on from the gear menu…
+        XCTAssertFalse(SoundPlayer.shared.enabled) // …still silenced by the active mute
+        XCTAssertTrue(s.isMuted)                    // mute flag unaffected
+    }
+
+    /// Mute does not touch banner notifications — they're a separate, quieter channel.
+    func testMuteLeavesNotificationsEnabled() {
+        let s = AppSettings.shared
+        s.notificationsEnabled = true
+        s.isMuted = true
+        XCTAssertTrue(Notifier.shared.enabled)
     }
 }

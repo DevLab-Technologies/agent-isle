@@ -131,7 +131,7 @@ struct ExpandedIsland: View {
     /// reachable without opening a menu. Lights up when muted.
     private var muteButton: some View {
         Button {
-            settings.setMuted(!settings.isMuted)
+            settings.isMuted.toggle()
         } label: {
             Image(systemName: settings.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 .font(.system(size: 11))
