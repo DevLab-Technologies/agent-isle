@@ -108,6 +108,46 @@ enum Jumper {
         return URL(string: "claude://resume?session=\(stem)")
     }
 
+    /// A deep-link that opens a specific Claude Code editor-extension session (VS Code /
+    /// Cursor / Windsurf) *by id* and pre-fills `prompt` into its input. The extension can't
+    /// submit for us — it doesn't fire hooks and renders `AskUserQuestion` as a native picker —
+    /// but it registers `<scheme>://anthropic.claude-code/open?session=&prompt=`, which lands
+    /// on the exact conversation (across any number of windows/tabs) with the answer typed in,
+    /// leaving the user a single keypress. The session id is the CLI session UUID taken from
+    /// the transcript filename; nil when this isn't an editor host or there's no UUID transcript.
+    static func editorAnswerURL(for session: AgentSession, prompt: String) -> URL? {
+        guard let scheme = editorURLScheme(for: session),
+              let stem = session.transcriptURL?.deletingPathExtension().lastPathComponent,
+              UUID(uuidString: stem) != nil else { return nil }
+        var comps = URLComponents()
+        comps.scheme = scheme
+        comps.host = "anthropic.claude-code"
+        comps.path = "/open"
+        comps.queryItems = [
+            URLQueryItem(name: "session", value: stem),
+            URLQueryItem(name: "prompt", value: prompt),
+        ]
+        return comps.url
+    }
+
+    /// The custom URL scheme for the editor hosting this session, or nil for non-editors.
+    /// Prefer the hook-reported bundle (exact fork), else the transcript's display label.
+    static func editorURLScheme(for session: AgentSession) -> String? {
+        switch session.terminalBundleID {
+        case "com.microsoft.VSCode": return "vscode"
+        case "com.microsoft.VSCodeInsiders": return "vscode-insiders"
+        case "com.todesktop.230313mzl4w4u92": return "cursor"
+        case "com.exafunction.windsurf": return "windsurf"
+        default: break
+        }
+        switch session.terminal {
+        case "VS Code": return "vscode"
+        case "Cursor": return "cursor"
+        case "Windsurf": return "windsurf"
+        default: return nil
+        }
+    }
+
     /// Open/focus `path` with the editor's bundled CLI (`code`, `cursor`, …). The CLI
     /// focuses an existing window that already has the folder open instead of spawning a
     /// new one — which `open -b` does unreliably, landing on a random window. Returns false

@@ -162,6 +162,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Set up CLI approvals on launch (zero-config first run, gentle nudge after that;
         // skipped entirely if the user opted out).
         if ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] != "1" {
+            // Self-heal stale hooks first: an older Agent Isle may have installed a hook that
+            // predates newer behavior (question/plan cards), and `isInstalled()` alone never
+            // re-copies it. Runs regardless of the auto-setup preference — a user who declined
+            // auto-setup but has hooks installed still deserves the fixed script. Takes effect
+            // on the next session start for each CLI.
+            for integration in CLIIntegration.hookCapable {
+                integration.hook?.refreshIfStale()
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.runIntegrationSetup()
             }

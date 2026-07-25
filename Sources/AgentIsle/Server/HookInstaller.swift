@@ -15,4 +15,9 @@ enum HookInstaller {
 
     @discardableResult
     static func uninstall() -> Bool { CLIIntegration.claude.hook?.uninstall() ?? true }
+
+    /// Re-copy the bundled hook when an older Agent Isle left a stale one installed. No-op
+    /// when not installed or already current.
+    @discardableResult
+    static func refreshIfStale() -> Bool { CLIIntegration.claude.hook?.refreshIfStale() ?? false }
 }

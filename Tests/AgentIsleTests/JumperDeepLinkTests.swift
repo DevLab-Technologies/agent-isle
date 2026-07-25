@@ -52,4 +52,43 @@ final class JumperDeepLinkTests: XCTestCase {
         // No bundle and an unrecognized label → can't predict focus; caller settles instead.
         XCTAssertNil(Jumper.targetBundleID(for: session(terminal: "Mystery", bundle: nil)))
     }
+
+    // MARK: - editorAnswerURL (VS Code / Cursor / Windsurf answer deep-link)
+
+    private func editorSession(terminal: String, bundle: String?, uuid: String) -> AgentSession {
+        let url = URL(fileURLWithPath: "/Users/me/.claude/projects/slug/\(uuid).jsonl")
+        return AgentSession(agent: .claude, title: "t", terminal: terminal,
+                            lastMessage: "", status: .asking,
+                            terminalBundleID: bundle, transcriptURL: url)
+    }
+
+    func testEditorAnswerURLBuildsSchemeSessionAndPrompt() {
+        let uuid = "3F2504E0-4F89-41D3-9A0C-0305E82C3301"
+        let s = editorSession(terminal: "VS Code", bundle: nil, uuid: uuid)
+        let url = Jumper.editorAnswerURL(for: s, prompt: "Tabs, not spaces")
+        XCTAssertEqual(url?.scheme, "vscode")
+        XCTAssertEqual(url?.host, "anthropic.claude-code")
+        XCTAssertEqual(url?.path, "/open")
+        let items = URLComponents(url: url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.first { $0.name == "session" }?.value, uuid)
+        XCTAssertEqual(items.first { $0.name == "prompt" }?.value, "Tabs, not spaces")
+    }
+
+    func testEditorAnswerURLUsesForkScheme() {
+        let uuid = "3F2504E0-4F89-41D3-9A0C-0305E82C3301"
+        let cursor = editorSession(terminal: "Cursor", bundle: "com.todesktop.230313mzl4w4u92", uuid: uuid)
+        XCTAssertEqual(Jumper.editorAnswerURL(for: cursor, prompt: "x")?.scheme, "cursor")
+    }
+
+    func testEditorAnswerURLNilForNonEditorOrNonUUID() {
+        // Terminal host → no editor deep-link.
+        let term = editorSession(terminal: "Terminal", bundle: nil,
+                                 uuid: "3F2504E0-4F89-41D3-9A0C-0305E82C3301")
+        XCTAssertNil(Jumper.editorAnswerURL(for: term, prompt: "x"))
+        // Editor host but a non-UUID transcript stem → no resumable session id.
+        let bad = AgentSession(agent: .claude, title: "t", terminal: "VS Code",
+                               lastMessage: "", status: .asking,
+                               transcriptURL: URL(fileURLWithPath: "/x/history.json"))
+        XCTAssertNil(Jumper.editorAnswerURL(for: bad, prompt: "x"))
+    }
 }
