@@ -294,11 +294,24 @@ final class SessionStore: ObservableObject {
         tailer.start(url: url, agent: session.agent)
     }
 
-    /// Deliver a typed message into the session's terminal.
+    /// Deliver a typed message into the session's host.
+    ///
+    /// Editor extensions (VS Code / Cursor / Windsurf) render their own input and can't be
+    /// driven by synthetic keystrokes, so we use the extension's deep-link to open the exact
+    /// session with the message pre-filled (one keypress to send) — no Accessibility needed.
+    /// Terminals still take the keystroke/AppleScript transport.
     func sendMessage(_ text: String, to session: AgentSession) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         sendError = nil
+
+        let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
+        if let url = Jumper.editorAnswerURL(for: session, prompt: oneLine) {
+            NSWorkspace.shared.open(url)
+            SoundPlayer.shared.play(.select)
+            return
+        }
+
         MessageSender.send(trimmed, to: session) { [weak self] result in
             switch result {
             case .success:
@@ -371,12 +384,14 @@ final class SessionStore: ObservableObject {
         let session = sessions.first { $0.id == sessionID }
         let viaTranscript = session?.question?.source == .transcript
 
-        // Editor extension: pre-fill the answer into the exact session via its deep-link. Leave
-        // the card up (no clear, no answered-marker) — the poller removes it once the user sends
-        // and the transcript advances, so a not-yet-sent answer never looks resolved.
+        // Editor extension: jump to the *exact* session via its deep-link (this is the only
+        // thing that reliably works across multiple windows/tabs). The answer is passed as a
+        // prompt too, but the extension only pre-fills it when the session isn't already open —
+        // for a live/open session it shows "enter it manually", so we don't claim it was sent.
+        // Leave the card up; the poller clears it once the transcript advances.
         if viaTranscript, let session, let url = Jumper.editorAnswerURL(for: session, prompt: oneLine) {
             NSWorkspace.shared.open(url)
-            update(id: sessionID) { $0.lastMessage = "Pre-filled in \($0.terminal) — press Enter to send" }
+            update(id: sessionID) { $0.lastMessage = "Opened in \($0.terminal) — answer it there" }
             SoundPlayer.shared.play(.select)
             return
         }

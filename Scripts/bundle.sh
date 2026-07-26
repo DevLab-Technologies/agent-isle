@@ -73,4 +73,18 @@ PLIST
 /usr/libexec/PlistBuddy -c "Set CFBundleVersion $VERSION" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set CFBundleShortVersionString $VERSION" "$CONTENTS/Info.plist"
 
+# Sign with the stable dev identity if it exists (see Scripts/dev-cert.sh). This gives the
+# dev build a persistent code identity so macOS TCC grants — Accessibility, Automation —
+# survive rebuilds instead of resetting each time. Without it the app link-time ad-hoc
+# signature changes every build and permissions must be re-granted. Never used for release
+# (release.sh signs with the Developer ID cert); purely local dev ergonomics.
+DEV_IDENTITY="Agent Isle Dev"
+if security find-identity -p codesigning 2>/dev/null | grep -q "$DEV_IDENTITY"; then
+  codesign --force --sign "$DEV_IDENTITY" "$APP" >/dev/null 2>&1 \
+    && echo "Signed with stable dev identity '$DEV_IDENTITY' (permissions persist across rebuilds)." \
+    || echo "warning: signing with '$DEV_IDENTITY' failed; build is ad-hoc (permissions will reset)."
+else
+  echo "Tip: run 'bash Scripts/dev-cert.sh' once so Accessibility/Automation grants persist across dev rebuilds."
+fi
+
 echo "Built: $APP ($VERSION)"

@@ -12,6 +12,7 @@ import ApplicationServices
 enum MessageSender {
     enum SendError: Error {
         case accessibilityDenied
+        case automationDenied(String)
         case couldNotFocus(String)
         case scriptFailed(String)
 
@@ -20,6 +21,8 @@ enum MessageSender {
             switch self {
             case .accessibilityDenied:
                 return "Grant Accessibility to Agent Isle in System Settings › Privacy. If it already looks enabled, remove it there, re-add this copy, and relaunch."
+            case .automationDenied(let app):
+                return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
             case .couldNotFocus(let app):
                 return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
             case .scriptFailed(let detail):
@@ -41,9 +44,9 @@ enum MessageSender {
 
         switch bundle {
         case iterm:
-            runScriptOffMain(itermScript(line), completion: completion)
+            runScriptOffMain(itermScript(line), app: "iTerm2", completion: completion)
         case terminal:
-            runScriptOffMain(terminalScript(line), completion: completion)
+            runScriptOffMain(terminalScript(line), app: "Terminal", completion: completion)
         default:
             sendViaKeystrokes(line, to: session, completion: completion)
         }
@@ -57,9 +60,10 @@ enum MessageSender {
     /// so running it on the main thread would freeze the whole UI (and with it the Quit
     /// menu, leaving no way to exit this accessory app). Off-main, the UI stays responsive.
     nonisolated private static func runScriptOffMain(
-        _ source: String, completion: @escaping (Result<Void, SendError>) -> Void) {
+        _ source: String, app: String,
+        completion: @escaping (Result<Void, SendError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = runAppleScript(source)
+            let result = runAppleScript(source, app: app)
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -89,13 +93,20 @@ enum MessageSender {
         """
     }
 
-    nonisolated private static func runAppleScript(_ source: String) -> Result<Void, SendError> {
+    nonisolated private static func runAppleScript(_ source: String, app: String) -> Result<Void, SendError> {
         var errorInfo: NSDictionary?
         guard let script = NSAppleScript(source: source) else {
             return .failure(.scriptFailed("invalid script"))
         }
         script.executeAndReturnError(&errorInfo)
-        if let errorInfo, let msg = errorInfo[NSAppleScript.errorMessage] as? String {
+        if let errorInfo {
+            // -1743 = errAEEventNotPermitted: the user hasn't granted Automation control of the
+            // target app (System Settings › Privacy › Automation). Surface an actionable hint
+            // instead of the raw "Not authorized to send Apple events" text.
+            if (errorInfo[NSAppleScript.errorNumber] as? Int) == -1743 {
+                return .failure(.automationDenied(app))
+            }
+            let msg = errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript error"
             return .failure(.scriptFailed(msg))
         }
         return .success(())
