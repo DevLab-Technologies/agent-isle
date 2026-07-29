@@ -46,6 +46,7 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Agent Isle delivers your typed messages and answers into Terminal and iTerm sessions.</string>
 </dict>
 </plist>
 PLIST

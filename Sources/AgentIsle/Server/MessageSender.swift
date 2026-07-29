@@ -100,13 +100,15 @@ enum MessageSender {
         }
         script.executeAndReturnError(&errorInfo)
         if let errorInfo {
-            // -1743 = errAEEventNotPermitted: the user hasn't granted Automation control of the
-            // target app (System Settings › Privacy › Automation). Surface an actionable hint
-            // instead of the raw "Not authorized to send Apple events" text.
-            if (errorInfo[NSAppleScript.errorNumber] as? Int) == -1743 {
+            let num = errorInfo[NSAppleScript.errorNumber] as? Int
+            let msg = errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript error"
+            // Automation control of the target app hasn't been granted (System Settings ›
+            // Privacy › Automation). Match both the -1743 (errAEEventNotPermitted) code and the
+            // "Not authorized to send Apple events" text — the latter also appears before the
+            // usage-description consent is granted — and surface an actionable hint.
+            if num == -1743 || msg.localizedCaseInsensitiveContains("not authorized to send apple events") {
                 return .failure(.automationDenied(app))
             }
-            let msg = errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript error"
             return .failure(.scriptFailed(msg))
         }
         return .success(())
