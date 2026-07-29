@@ -247,7 +247,9 @@ struct QuestionCard: View {
                 }
             }
             if question.source == .transcript {
-                // No parked hook to reply to — the answer is typed into the host app.
+                // No parked hook to reply to — the answer is typed into the host app's input
+                // (the chat box for GUI hosts, the prompt for terminals), which the agent reads
+                // as the reply. Needs Accessibility for the keystroke transport.
                 HStack(spacing: 4) {
                     Image(systemName: "keyboard")
                         .font(.system(size: 8))

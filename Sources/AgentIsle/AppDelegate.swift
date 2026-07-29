@@ -41,6 +41,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // server port (4711). A fresh launch wins.
         terminateOtherInstances()
 
+        // Permissions (Accessibility above all) only stick when the app runs from a stable
+        // location. A quarantined app launched from ~/Downloads is App-Translocated to a
+        // random read-only path, so a granted Accessibility switch never takes effect — the
+        // root cause of the notch re-asking for Accessibility and answers failing to reach a
+        // session. Offer to relocate before we stand up any servers or windows. Skipped in
+        // demo/capture runs.
+        if ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] != "1",
+           ProcessInfo.processInfo.environment["AGENT_ISLE_SETTINGS"] != "1" {
+            InstallLocation.offerToRelocateIfNeeded()
+        }
+
         // Floating island over the notch. Suppressed in settings-capture mode so it
         // doesn't float over the settings window during a screenshot. Actual visibility is
         // decided by `applyDisplayMode()` once the launch overrides below are known.
@@ -151,6 +162,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Set up CLI approvals on launch (zero-config first run, gentle nudge after that;
         // skipped entirely if the user opted out).
         if ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] != "1" {
+            // Self-heal stale hooks first: an older Agent Isle may have installed a hook that
+            // predates newer behavior (question/plan cards), and `isInstalled()` alone never
+            // re-copies it. Runs regardless of the auto-setup preference — a user who declined
+            // auto-setup but has hooks installed still deserves the fixed script. Takes effect
+            // on the next session start for each CLI.
+            for integration in CLIIntegration.hookCapable {
+                integration.hook?.refreshIfStale()
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.runIntegrationSetup()
             }

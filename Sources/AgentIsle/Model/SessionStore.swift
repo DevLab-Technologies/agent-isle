@@ -294,11 +294,24 @@ final class SessionStore: ObservableObject {
         tailer.start(url: url, agent: session.agent)
     }
 
-    /// Deliver a typed message into the session's terminal.
+    /// Deliver a typed message into the session's host.
+    ///
+    /// Editor extensions (VS Code / Cursor / Windsurf) render their own input and can't be
+    /// driven by synthetic keystrokes, so we use the extension's deep-link to open the exact
+    /// session with the message pre-filled (one keypress to send) — no Accessibility needed.
+    /// Terminals still take the keystroke/AppleScript transport.
     func sendMessage(_ text: String, to session: AgentSession) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         sendError = nil
+
+        let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
+        if let url = Jumper.editorAnswerURL(for: session, prompt: oneLine) {
+            NSWorkspace.shared.open(url)
+            SoundPlayer.shared.play(.select)
+            return
+        }
+
         MessageSender.send(trimmed, to: session) { [weak self] result in
             switch result {
             case .success:
@@ -354,17 +367,35 @@ final class SessionStore: ObservableObject {
     /// Send the user's answer (one option, several joined options, or free text) back
     /// to the waiting agent. Ignores empty answers so a stray submit can't resolve it.
     ///
-    /// Delivery depends on how the question reached us. A hook-pushed question has a
-    /// parked connection, so the answer replies straight to the blocked hook. A
-    /// transcript-detected question (Desktop app / no reachable hook) has no such channel,
-    /// so we type the answer into the session's host app — best-effort, the same terminal-
-    /// driving transport as in-notch chat, and it may not land in the Desktop app.
+    /// Delivery depends on how the question reached us:
+    ///  - A hook-pushed question has a parked connection, so the answer replies straight to
+    ///    the blocked hook (terminal CLI — fully automatic).
+    ///  - An editor-extension question (VS Code / Cursor / Windsurf) has no hook and a native
+    ///    picker we can't drive, but the extension deep-links to a session by id with the
+    ///    answer pre-filled — so we open the exact conversation with the answer typed in and
+    ///    leave the user one keypress. We can't confirm the send, so the card stays until the
+    ///    poller sees the transcript advance.
+    ///  - Any other transcript host (e.g. Desktop) has no channel, so we type the answer into
+    ///    the host app — best-effort, and it may not land.
     func answerQuestion(sessionID: UUID, answer: String) {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: "; ")
         let session = sessions.first { $0.id == sessionID }
         let viaTranscript = session?.question?.source == .transcript
+
+        // Editor extension: jump to the *exact* session via its deep-link (this is the only
+        // thing that reliably works across multiple windows/tabs). The answer is passed as a
+        // prompt too, but the extension only pre-fills it when the session isn't already open —
+        // for a live/open session it shows "enter it manually", so we don't claim it was sent.
+        // Leave the card up; the poller clears it once the transcript advances.
+        if viaTranscript, let session, let url = Jumper.editorAnswerURL(for: session, prompt: oneLine) {
+            NSWorkspace.shared.open(url)
+            update(id: sessionID) { $0.lastMessage = "Opened in \($0.terminal) — answer it there" }
+            SoundPlayer.shared.play(.select)
+            return
+        }
+
         // Remember an answered transcript question so the poller doesn't resurface it
         // while the answer is in flight.
         if viaTranscript, let q = session?.question {

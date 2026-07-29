@@ -12,13 +12,19 @@ import ApplicationServices
 enum MessageSender {
     enum SendError: Error {
         case accessibilityDenied
+        case automationDenied(String)
+        case couldNotFocus(String)
         case scriptFailed(String)
 
         /// A short, user-facing explanation shown under the input bar.
         var userMessage: String {
             switch self {
             case .accessibilityDenied:
-                return "Grant Accessibility access to Agent Isle in System Settings › Privacy, then try again."
+                return "Grant Accessibility to Agent Isle in System Settings › Privacy. If it already looks enabled, remove it there, re-add this copy, and relaunch."
+            case .automationDenied(let app):
+                return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
+            case .couldNotFocus(let app):
+                return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
             case .scriptFailed(let detail):
                 return "Couldn't send: \(detail)"
             }
@@ -38,9 +44,9 @@ enum MessageSender {
 
         switch bundle {
         case iterm:
-            runScriptOffMain(itermScript(line), completion: completion)
+            runScriptOffMain(itermScript(line), app: "iTerm2", completion: completion)
         case terminal:
-            runScriptOffMain(terminalScript(line), completion: completion)
+            runScriptOffMain(terminalScript(line), app: "Terminal", completion: completion)
         default:
             sendViaKeystrokes(line, to: session, completion: completion)
         }
@@ -54,9 +60,10 @@ enum MessageSender {
     /// so running it on the main thread would freeze the whole UI (and with it the Quit
     /// menu, leaving no way to exit this accessory app). Off-main, the UI stays responsive.
     nonisolated private static func runScriptOffMain(
-        _ source: String, completion: @escaping (Result<Void, SendError>) -> Void) {
+        _ source: String, app: String,
+        completion: @escaping (Result<Void, SendError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = runAppleScript(source)
+            let result = runAppleScript(source, app: app)
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -86,13 +93,22 @@ enum MessageSender {
         """
     }
 
-    nonisolated private static func runAppleScript(_ source: String) -> Result<Void, SendError> {
+    nonisolated private static func runAppleScript(_ source: String, app: String) -> Result<Void, SendError> {
         var errorInfo: NSDictionary?
         guard let script = NSAppleScript(source: source) else {
             return .failure(.scriptFailed("invalid script"))
         }
         script.executeAndReturnError(&errorInfo)
-        if let errorInfo, let msg = errorInfo[NSAppleScript.errorMessage] as? String {
+        if let errorInfo {
+            let num = errorInfo[NSAppleScript.errorNumber] as? Int
+            let msg = errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript error"
+            // Automation control of the target app hasn't been granted (System Settings ›
+            // Privacy › Automation). Match both the -1743 (errAEEventNotPermitted) code and the
+            // "Not authorized to send Apple events" text — the latter also appears before the
+            // usage-description consent is granted — and surface an actionable hint.
+            if num == -1743 || msg.localizedCaseInsensitiveContains("not authorized to send apple events") {
+                return .failure(.automationDenied(app))
+            }
             return .failure(.scriptFailed(msg))
         }
         return .success(())
@@ -112,13 +128,46 @@ enum MessageSender {
             completion(.failure(.accessibilityDenied))
             return
         }
-        // Bring the session's terminal forward, then type once it's frontmost.
+        // Bring the session's app forward, then type only once it is actually frontmost.
+        // A fixed delay races the async activation (`NSWorkspace.openApplication` returns
+        // before the app is front), so keystrokes could land in whatever app happened to
+        // have focus — the answer would silently go nowhere while we reported success.
+        // Waiting for real focus, and failing if it never comes, keeps "sent" honest.
         Jumper.jump(to: session)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        waitUntilFrontmost(Jumper.targetBundleID(for: session)) { focused in
+            guard focused else {
+                completion(.failure(.couldNotFocus(session.terminal)))
+                return
+            }
             typeString(text)
             pressReturn()
             completion(.success(()))
         }
+    }
+
+    /// Poll until the app with `bundleID` is frontmost — async activation makes any fixed
+    /// delay unreliable. Calls back with `true` once it's front (after a short beat so it can
+    /// focus its input field), or `false` if it isn't within `timeout`. When the target bundle
+    /// is unknown (an open-URL jump rule) we can't verify focus, so fall back to a short
+    /// settle delay and assume it landed.
+    private static func waitUntilFrontmost(_ bundleID: String?,
+                                           timeout: TimeInterval = 1.5,
+                                           completion: @escaping (Bool) -> Void) {
+        guard let bundleID else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { completion(true) }
+            return
+        }
+        let start = Date()
+        func poll() {
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { completion(true) }
+            } else if Date().timeIntervalSince(start) >= timeout {
+                completion(false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() }
+            }
+        }
+        poll()
     }
 
     /// Returns true if we may post synthetic events; otherwise triggers the one-time

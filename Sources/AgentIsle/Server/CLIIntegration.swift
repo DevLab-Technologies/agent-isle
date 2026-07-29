@@ -236,6 +236,26 @@ struct GenericHookInstaller {
         return text.contains("localhost:\(port)")
     }
 
+    /// True when the installed bridge script is byte-identical to the one this app build
+    /// ships. A mismatch means an older Agent Isle installed the hook and newer behavior
+    /// (e.g. `AskUserQuestion`/`ExitPlanMode` cards) is missing from the on-disk copy.
+    func installedMatchesBundled() -> Bool {
+        guard let bundled = bundledScriptURL(),
+              fm.fileExists(atPath: installedScriptURL.path) else { return false }
+        return fm.contentsEqual(atPath: bundled.path, andPath: installedScriptURL.path)
+    }
+
+    /// Re-copy the bundled script (and re-assert our settings entries) when the hook is
+    /// installed but out of date, so shipped hook fixes reach users who installed an older
+    /// version — without them manually reinstalling. No-op when not installed or already
+    /// current, and it never touches a session mid-run (only the on-disk script + settings).
+    @discardableResult
+    func refreshIfStale() -> Bool {
+        guard isInstalled(), !installedMatchesBundled() else { return false }
+        NSLog("GenericHookInstaller[\(agentName)]: installed hook is stale — refreshing to bundled version")
+        return install()
+    }
+
     // MARK: Install / uninstall
 
     @discardableResult

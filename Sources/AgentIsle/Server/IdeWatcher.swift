@@ -121,9 +121,19 @@ final class IdeWatcher {
 
                 store.update(id: id) { s in
                     s.title = title
-                    // Keep the hook's precise terminal (from TERM_PROGRAM) if we have it;
-                    // the transcript only knows cli vs IDE, not which terminal app.
-                    if s.terminalBundleID == nil { s.terminal = terminal }
+                    // Host label. Claude Desktop is the exception: it fires the hook for
+                    // tools but reports no TERM_PROGRAM, so the hook mislabels it "Terminal"
+                    // (and pins a bundle, so the rule below would keep that stale label). The
+                    // transcript's `entrypoint` names Desktop exactly, so it wins there — the
+                    // card then reads "Answer in Desktop" and Jumper deep-links to the exact
+                    // session. For editors/terminals the hook is more precise (it tells VS Code
+                    // from Cursor, iTerm from Terminal), so keep it when we have it.
+                    if activity.entrypoint == "claude-desktop" {
+                        s.terminal = terminal          // "Desktop"
+                        s.terminalBundleID = nil       // let Jumper resolve via the deep-link
+                    } else if s.terminalBundleID == nil {
+                        s.terminal = terminal
+                    }
                     s.tokens = tokens
                     // Only update the model when this tail actually carried one; a chunk
                     // without an assistant turn shouldn't wipe a model we already know.
