@@ -283,13 +283,18 @@ def main():
                              command=tin.get("command"),
                              message=f"Wants to run {tool}")
                 result = post(event, timeout=TIMEOUT)
-                decision = result.get("decision", "allow")
-                allow = decision not in ("deny", "no")
+                decision = result.get("decision")
+                allow = decision in ("allow", "yes")
+                reason = (
+                    "Decided from Agent Isle"
+                    if decision in ("allow", "yes", "deny", "no")
+                    else "Agent Isle returned an invalid approval response"
+                )
                 print(json.dumps({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "allow" if allow else "deny",
-                        "permissionDecisionReason": "Decided from Agent Isle",
+                        "permissionDecisionReason": reason,
                     }
                 }))
             else:
