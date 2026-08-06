@@ -23,6 +23,7 @@ import urllib.request
 
 ISLAND_URL = "http://localhost:4711/event"
 TIMEOUT = 280  # seconds to wait for a notch decision before falling back to Claude's own prompt
+TOKEN_PATH = os.path.join(os.path.expanduser("~"), ".agent-isle", "token")
 
 # Tools Claude Code never prompts for (read-only / bookkeeping) — don't gate these.
 READONLY_TOOLS = {
@@ -47,10 +48,23 @@ def should_ask(mode, tool):
     return True  # default / acceptEdits(non-edit) / unknown mode
 
 
+def load_token():
+    """Shared secret written by Agent Isle at `~/.agent-isle/token` (mode 0600)."""
+    try:
+        with open(TOKEN_PATH, "r", encoding="utf-8") as f:
+            token = f.read().strip()
+        return token or None
+    except Exception:
+        return None
+
+
 def post(payload, timeout=5):
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(ISLAND_URL, data=data,
-                                 headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    token = load_token()
+    if token:
+        headers["X-Agent-Isle-Token"] = token
+    req = urllib.request.Request(ISLAND_URL, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

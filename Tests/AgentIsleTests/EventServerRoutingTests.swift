@@ -9,11 +9,31 @@ final class EventServerRoutingTests: XCTestCase {
 
     private func setup(_ request: PermissionRequest) -> (EventServer, SessionStore, UUID) {
         let store = SessionStore()
-        let server = EventServer(store: store)
+        let server = EventServer(store: store, authToken: "test-token")
         let id = UUID()
         store.upsert(AgentSession(id: id, agent: .claude, title: "t", terminal: "iTerm",
                                   lastMessage: "", status: .waiting, permission: request))
         return (server, store, id)
+    }
+
+    func testRejectsMissingAndWrongToken() {
+        let store = SessionStore()
+        let server = EventServer(store: store, authToken: "secret-token")
+        let noHeader = "POST /event HTTP/1.1\r\nContent-Type: application/json"
+        XCTAssertFalse(server.isAuthorized(headerBlock: noHeader))
+        let wrong = "POST /event HTTP/1.1\r\nX-Agent-Isle-Token: nope\r\nContent-Type: application/json"
+        XCTAssertFalse(server.isAuthorized(headerBlock: wrong))
+        let ok = "POST /event HTTP/1.1\r\nX-Agent-Isle-Token: secret-token\r\nContent-Type: application/json"
+        XCTAssertTrue(server.isAuthorized(headerBlock: ok))
+        // Header name is case-insensitive.
+        let mixed = "POST /event HTTP/1.1\r\nx-agent-isle-token: secret-token"
+        XCTAssertTrue(server.isAuthorized(headerBlock: mixed))
+    }
+
+    func testTokenParserExtractsHeader() {
+        let block = "POST /event HTTP/1.1\r\nHost: localhost\r\nX-Agent-Isle-Token: abc123\r\n\r\n"
+        XCTAssertEqual(EventServer.token(inHeaderBlock: block), "abc123")
+        XCTAssertNil(EventServer.token(inHeaderBlock: "POST /event HTTP/1.1\r\nHost: localhost"))
     }
 
     func testPromptsByDefault() {
