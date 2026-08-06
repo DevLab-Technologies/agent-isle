@@ -51,4 +51,35 @@ final class UpdateChannelTests: XCTestCase {
         XCTAssertEqual(r("v1.2.0").cleanVersion, "1.2.0")
         XCTAssertEqual(r("1.2.0").cleanVersion, "1.2.0")
     }
+
+    // MARK: - Codesign Team ID parsing (updater signature gate)
+
+    func testTeamIdentifierParsesCodesignVerboseOutput() {
+        let sample = """
+        Executable=/Applications/Agent Isle.app/Contents/MacOS/AgentIsle
+        Identifier=com.devlab.agent-isle
+        Format=app bundle with Mach-O thin (arm64)
+        CodeDirectory v=20500 size=1234 flags=0x10000(runtime) hashes=30+7 location=embedded
+        Signature size=9000
+        Authority=Developer ID Application: Example Inc (ABCD123456)
+        Authority=Developer ID Certification Authority
+        Authority=Apple Root CA
+        Timestamp=1 Jan 2026 at 12:00:00
+        Info.plist entries=12
+        TeamIdentifier=ABCD123456
+        Sealed Resources version=2 rules=13 files=5
+        Internal requirements count=1 size=180
+        """
+        XCTAssertEqual(Updater.teamIdentifier(fromCodesignOutput: sample), "ABCD123456")
+    }
+
+    func testTeamIdentifierReturnsNilWhenNotSetOrMissing() {
+        XCTAssertNil(Updater.teamIdentifier(fromCodesignOutput: "Signature=adhoc\n"))
+        XCTAssertNil(Updater.teamIdentifier(fromCodesignOutput: "TeamIdentifier=not set\n"))
+        XCTAssertNil(Updater.teamIdentifier(fromCodesignOutput: "TeamIdentifier=\n"))
+        XCTAssertEqual(
+            Updater.teamIdentifier(fromCodesignOutput: "Team Identifier=XY99TEAM01\n"),
+            "XY99TEAM01"
+        )
+    }
 }
