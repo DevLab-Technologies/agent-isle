@@ -11,6 +11,10 @@ import AppKit
 ///  - Blocking permission/question requests → the connection is parked until the
 ///    user decides in the island, then the server responds with the decision.
 ///    This lets a Claude Code `PreToolUse` hook gate a tool on the notch answer.
+///
+/// Every request must carry `X-Agent-Isle-Token` matching `~/.agent-isle/token`
+/// (see `EventAuthToken`). Loopback binding blocks the LAN; the token blocks other
+/// local processes from injecting events or superseding parked permission hooks.
 @MainActor
 final class EventServer {
     static var shared: EventServer?
@@ -21,13 +25,17 @@ final class EventServer {
     private static let headerTerminator = Data("\r\n\r\n".utf8)
 
     private let store: SessionStore
+    /// Shared secret required on every request. Injected for tests; production loads
+    /// (or creates) `~/.agent-isle/token`.
+    private let authToken: String
     private var listener: NWListener?
 
     /// Hook connections held open while waiting on a user decision, keyed by session id.
     private var pending: [UUID: NWConnection] = [:]
 
-    init(store: SessionStore) {
+    init(store: SessionStore, authToken: String = EventAuthToken.loadOrCreate()) {
         self.store = store
+        self.authToken = authToken
     }
 
     func start() {
@@ -137,10 +145,35 @@ final class EventServer {
     private func handleRequest(_ data: Data, on conn: NWConnection) {
         // Split HTTP headers from the body.
         guard let range = data.range(of: Self.headerTerminator),
-              let event = try? JSONDecoder().decode(AgentEvent.self, from: data[range.upperBound...]) else {
-            respond(on: conn, json: #"{"ok":false,"error":"bad json"}"#); return
+              let headerBlock = String(data: data[..<range.lowerBound], encoding: .utf8) else {
+            respond(on: conn, status: 400, json: #"{"ok":false,"error":"bad request"}"#); return
+        }
+        guard isAuthorized(headerBlock: headerBlock) else {
+            respond(on: conn, status: 401, json: #"{"ok":false,"error":"unauthorized"}"#); return
+        }
+        guard let event = try? JSONDecoder().decode(AgentEvent.self, from: data[range.upperBound...]) else {
+            respond(on: conn, status: 400, json: #"{"ok":false,"error":"bad json"}"#); return
         }
         process(event, on: conn)
+    }
+
+    /// True when the request carries a valid `X-Agent-Isle-Token`. Extracted for unit tests.
+    func isAuthorized(headerBlock: String) -> Bool {
+        Self.token(inHeaderBlock: headerBlock)
+            .map { EventAuthToken.constantTimeEqual($0, authToken) } ?? false
+    }
+
+    /// Pull the token header value from a raw HTTP header block (request line + headers).
+    nonisolated static func token(inHeaderBlock headers: String) -> String? {
+        for line in headers.split(separator: "\r\n", omittingEmptySubsequences: false).dropFirst() {
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            let name = parts[0].trimmingCharacters(in: .whitespaces).lowercased()
+            guard name == EventAuthToken.headerName.lowercased() else { continue }
+            let value = parts[1].trimmingCharacters(in: .whitespaces)
+            return value.isEmpty ? nil : String(value)
+        }
+        return nil
     }
 
     private func process(_ event: AgentEvent, on conn: NWConnection) {
@@ -418,9 +451,16 @@ final class EventServer {
         respond(on: conn, json: json)
     }
 
-    private func respond(on conn: NWConnection, json: String) {
+    private func respond(on conn: NWConnection, status: Int = 200, json: String) {
         let body = json.data(using: .utf8) ?? Data()
-        let header = "HTTP/1.1 200 OK\r\n" +
+        let reason: String
+        switch status {
+        case 200: reason = "OK"
+        case 401: reason = "Unauthorized"
+        case 400: reason = "Bad Request"
+        default:  reason = "Error"
+        }
+        let header = "HTTP/1.1 \(status) \(reason)\r\n" +
             "Content-Type: application/json\r\n" +
             "Content-Length: \(body.count)\r\n" +
             "Connection: close\r\n\r\n"
