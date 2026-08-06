@@ -4,10 +4,13 @@ import os
 /// Delivers a typed message into a running agent session's terminal.
 ///
 /// Claude Code has no API to inject a prompt, so this drives the host terminal:
-///   • iTerm2 / Terminal.app  → their AppleScript dictionaries (`write text` / `do script`),
-///     which need no extra permission and target the terminal's current session directly.
-///   • everything else        → focus the app, then synthesize the keystrokes (types the
-///     text via a CGEvent and presses Return). This needs macOS Accessibility permission.
+///   • iTerm2           → AppleScript `write text` on the current session (no Accessibility
+///     prompt; needs Automation permission for iTerm).
+///   • everything else  → focus the app, then synthesize keystrokes (CGEvent unicode + Return).
+///     This needs macOS Accessibility permission.
+///
+/// Terminal.app is intentionally **not** scripted with `do script`: that command runs a
+/// shell line (often in a new tab) rather than typing into the live agent session.
 @MainActor
 enum MessageSender {
     enum SendError: Error {
@@ -41,9 +44,9 @@ enum MessageSender {
         }
     }
 
-    // Bundle identifiers we can script directly instead of simulating keystrokes.
-    private static let iterm = "com.googlecode.iterm2"
-    private static let terminal = "com.apple.Terminal"
+    /// Only iTerm exposes a safe "type into current session" AppleScript verb.
+    /// `nonisolated` so AppleScript helpers (off the main actor) can embed the id.
+    nonisolated private static let iterm = "com.googlecode.iterm2"
 
     // MARK: - Stale-completion guarding
 
@@ -105,14 +108,11 @@ enum MessageSender {
         let line = text.replacingOccurrences(of: "\n", with: " ")
         let bundle = session.terminalBundleID ?? bundleID(forLabel: session.terminal)
 
-        switch bundle {
-        case iterm:
+        if bundle == iterm {
             runScriptOffMain(itermScript(line), app: "iTerm2", generation: generation, channel: channel,
                              completion: guarded)
-        case terminal:
-            runScriptOffMain(terminalScript(line), app: "Terminal", generation: generation, channel: channel,
-                             completion: guarded)
-        default:
+        } else {
+            // Terminal.app, Ghostty, Warp, VS Code, Claude Desktop, …
             sendViaKeystrokes(line, to: session, generation: generation, channel: channel, completion: guarded)
         }
     }
@@ -153,18 +153,6 @@ enum MessageSender {
         """
     }
 
-    nonisolated private static func terminalScript(_ text: String) -> String {
-        // `front window` errors if Terminal has no open window — surface a clear reason
-        // instead of the raw AppleScript error.
-        """
-        tell application id "\(terminal)"
-            activate
-            if (count of windows) is 0 then error "no open Terminal window for this session"
-            do script "\(escape(text))" in front window
-        end tell
-        """
-    }
-
     nonisolated private static func runAppleScript(_ source: String, app: String) -> Result<Void, SendError> {
         var errorInfo: NSDictionary?
         guard let script = NSAppleScript(source: source) else {
@@ -192,7 +180,7 @@ enum MessageSender {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    // MARK: - Keystroke fallback
+    // MARK: - Keystroke delivery
 
     private static func sendViaKeystrokes(_ text: String, to session: AgentSession,
                                           generation: Int, channel: AnyHashable,
@@ -301,11 +289,10 @@ enum MessageSender {
 
     // MARK: - Helpers
 
-    /// Map a terminal display label to a bundle id for the AppleScript-capable apps.
+    /// Map a terminal display label to the iTerm bundle id when AppleScript delivery applies.
     private static func bundleID(forLabel label: String) -> String? {
         switch label {
         case "iTerm", "iTerm2": return iterm
-        case "Terminal": return terminal
         default: return nil
         }
     }
