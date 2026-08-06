@@ -16,35 +16,61 @@ final class PermissionDecisionTests: XCTestCase {
     }
 
     func testAllowOnceDoesNotRemember() {
-        let (store, id) = store(with: PermissionRequest(toolName: "Bash", command: "ls"))
+        let req = PermissionRequest(toolName: "Bash", command: "ls")
+        let (store, id) = store(with: req)
         store.resolvePermission(sessionID: id, decision: .allowOnce)
-        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: "Bash|ls"))
+        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: req.allowKey))
     }
 
     func testAlwaysAllowRemembersMatchingKeyOnly() {
-        let (store, id) = store(with: PermissionRequest(toolName: "Bash", command: "ls"))
+        let req = PermissionRequest(toolName: "Bash", command: "ls")
+        let (store, id) = store(with: req)
         store.resolvePermission(sessionID: id, decision: .always)
-        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: "Bash|ls"))
-        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: "Bash|rm -rf"))
+        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: req.allowKey))
+        XCTAssertFalse(store.isAutoAllowed(sessionID: id,
+                                           key: PermissionRequest(toolName: "Bash", command: "rm -rf").allowKey))
+    }
+
+    func testAlwaysAllowForEditIsPerFilePath() {
+        let first = PermissionRequest(toolName: "Edit", filePath: "src/a.swift")
+        let (store, id) = store(with: first)
+        store.resolvePermission(sessionID: id, decision: .always)
+        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: first.allowKey))
+        // A different file must re-prompt — Always Allow is not tool-wide for path tools.
+        let other = PermissionRequest(toolName: "Edit", filePath: "src/b.swift")
+        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: other.allowKey))
+        // Same path again is covered.
+        let same = PermissionRequest(toolName: "Edit", filePath: "src/a.swift")
+        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: same.allowKey))
+    }
+
+    func testAllowKeyIncludesCommandAndPathDiscriminators() {
+        XCTAssertEqual(PermissionRequest(toolName: "Bash", command: "ls").allowKey,
+                       "Bash|cmd:ls")
+        XCTAssertEqual(PermissionRequest(toolName: "Edit", filePath: "a.swift").allowKey,
+                       "Edit|file:a.swift")
+        XCTAssertEqual(PermissionRequest(toolName: "Write").allowKey, "Write|")
     }
 
     func testBypassAutoAllowsEverythingForTheSession() {
         let (store, id) = store(with: PermissionRequest(toolName: "Edit", filePath: "a.swift"))
         store.resolvePermission(sessionID: id, decision: .bypass)
-        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: "Bash|anything"))
-        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: "Edit|"))
+        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: "Bash|cmd:anything"))
+        XCTAssertTrue(store.isAutoAllowed(sessionID: id, key: "Edit|file:other.swift"))
     }
 
     func testDenyRemembersNothing() {
-        let (store, id) = store(with: PermissionRequest(toolName: "Bash", command: "ls"))
+        let req = PermissionRequest(toolName: "Bash", command: "ls")
+        let (store, id) = store(with: req)
         store.resolvePermission(sessionID: id, decision: .deny)
-        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: "Bash|ls"))
+        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: req.allowKey))
     }
 
     func testRemovingSessionClearsMemory() {
-        let (store, id) = store(with: PermissionRequest(toolName: "Bash", command: "ls"))
+        let req = PermissionRequest(toolName: "Bash", command: "ls")
+        let (store, id) = store(with: req)
         store.resolvePermission(sessionID: id, decision: .bypass)
         store.remove(id: id)
-        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: "Bash|ls"))
+        XCTAssertFalse(store.isAutoAllowed(sessionID: id, key: req.allowKey))
     }
 }
