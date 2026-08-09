@@ -15,9 +15,21 @@ struct CollapsedIsland: View {
         focus?.subAgents.filter(\.working).count ?? 0
     }
 
-    /// Wider ears so the session title has real room before it truncates (the old 148
-    /// clipped most repo·branch titles after ~14 chars).
-    private let earWidth: CGFloat = 176
+    /// Ears grow with their content up to this cap, past which the title truncates.
+    /// A fixed ear width made the pill ~570pt wide even for a short title, which crowded
+    /// (and on busier menu bars covered) the status icons flanking the notch.
+    private let maxEarWidth: CGFloat = 176
+    /// Keeps the pill a recognisable island rather than a sliver when there's little to show.
+    private let minEarWidth: CGFloat = 30
+
+    /// Natural width of the wider of the two ears, measured off-screen (see `earMeasurement`).
+    @State private var measuredEarWidth: CGFloat = 0
+
+    /// Both ears share one width so the transparent center gap stays centered in the pill —
+    /// and therefore over the physical notch, since the window is centered on screen.
+    private var earWidth: CGFloat {
+        min(maxEarWidth, max(minEarWidth, measuredEarWidth))
+    }
 
     /// Color of the "needs you" signal — amber for a pending permission, purple for a
     /// question, teal for a plan review, matching the per-status colors used elsewhere.
@@ -50,7 +62,31 @@ struct CollapsedIsland: View {
             NotchShape(bottomRadius: 16)
                 .stroke(Theme.Fill.hairline, lineWidth: 0.5)
         )
+        .background(earMeasurement)
+        .onPreferenceChange(EarWidthKey.self) { measuredEarWidth = $0 }
         .fixedSize()
+    }
+
+    /// Renders both ears at their natural width, hidden and outside the visible layout, so
+    /// `earWidth` can hug whichever side needs more room. Lives in a `.background` so it
+    /// never contributes to the pill's own size; the clusters here don't read `earWidth`,
+    /// so there's no measurement feedback loop.
+    private var earMeasurement: some View {
+        ZStack {
+            leftCluster
+            rightCluster
+        }
+        .fixedSize()
+        .hidden()
+        // `.hidden()` stops drawing, not instantiation: these clusters still run their
+        // `onAppear`, so without this flag the pill would drive a second, permanently
+        // invisible copy of every repeating animation for as long as the app is up.
+        .environment(\.isMeasuringIsland, true)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: EarWidthKey.self, value: proxy.size.width)
+            }
+        )
     }
 
     /// Clean mode strips the pill back to the focus session's title and the count; detailed
@@ -113,9 +149,31 @@ struct CollapsedIsland: View {
     }
 }
 
+/// True inside the collapsed pill's off-screen measuring pass, so views that would start a
+/// perpetual animation on appear can sit that copy out.
+private struct IsMeasuringIslandKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    fileprivate var isMeasuringIsland: Bool {
+        get { self[IsMeasuringIslandKey.self] }
+        set { self[IsMeasuringIslandKey.self] = newValue }
+    }
+}
+
+/// Carries the natural width of the collapsed pill's widest ear up to `CollapsedIsland`.
+private struct EarWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct StatusDot: View {
     let status: SessionStatus
     @State private var pulse = false
+    @Environment(\.isMeasuringIsland) private var isMeasuring
 
     var body: some View {
         Circle()
@@ -124,7 +182,7 @@ struct StatusDot: View {
             .shadow(color: status.color.opacity(0.7), radius: pulse ? 4 : 1)
             .scaleEffect(status == .working && pulse ? 1.25 : 1)
             .onAppear {
-                if status == .working || status == .waiting {
+                if !isMeasuring, status == .working || status == .waiting {
                     withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                         pulse = true
                     }
@@ -152,6 +210,7 @@ struct CountBadge: View {
 struct LivePulse: View {
     let color: Color
     @State private var animate = false
+    @Environment(\.isMeasuringIsland) private var isMeasuring
 
     var body: some View {
         ZStack {
@@ -166,6 +225,7 @@ struct LivePulse: View {
         }
         .frame(width: 15, height: 15)
         .onAppear {
+            guard !isMeasuring else { return }
             withAnimation(.easeOut(duration: 1.1).repeatForever(autoreverses: false)) {
                 animate = true
             }
