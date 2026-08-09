@@ -182,19 +182,31 @@ final class RemoteTranscriptSync {
     }
 
     /// State for a session we haven't synced yet this run, picking up a mirror left behind
-    /// by a previous one. Falls back to a full re-fetch if either piece is missing.
+    /// by a previous one. Falls back to a full re-fetch if anything doesn't line up.
+    ///
+    /// The record pairs the remote offset with the mirror's size at the moment it was
+    /// written, and the resume point is only trusted while the mirror still has that size.
+    /// The append happens before the record is updated, so a process killed between them
+    /// (the app SIGKILLs an older copy of itself on launch) would otherwise leave an offset
+    /// that under-reports the mirror — and the next sync would append that stretch a second
+    /// time, double-counting its tokens and replaying its messages for good.
     private func restoredState(_ id: String) -> State {
         var state = State()
-        guard FileManager.default.fileExists(atPath: cacheURL(id).path),
-              let text = try? String(contentsOf: offsetURL(id), encoding: .utf8),
-              let saved = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-              saved > 0 else { return state }
-        state.offset = saved
+        guard let text = try? String(contentsOf: offsetURL(id), encoding: .utf8) else { return state }
+        let fields = text.split(separator: " ").compactMap { Int($0) }
+        guard fields.count == 2, fields[0] > 0,
+              let actual = mirrorSize(id), actual == fields[1] else { return state }
+        state.offset = fields[0]
         return state
     }
 
     private func persist(offset: Int, for id: String) {
-        try? String(offset).write(to: offsetURL(id), atomically: true, encoding: .utf8)
+        guard let size = mirrorSize(id) else { return }
+        try? String("\(offset) \(size)").write(to: offsetURL(id), atomically: true, encoding: .utf8)
+    }
+
+    private func mirrorSize(_ id: String) -> Int? {
+        try? FileManager.default.attributesOfItem(atPath: cacheURL(id).path)[.size] as? Int
     }
 
     // MARK: - Fetching

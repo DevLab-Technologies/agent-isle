@@ -288,17 +288,22 @@ final class IdeWatcher {
     /// still shows what Desktop's store knows, so the session is never invisible.
     private func apply(remote r: RemoteSession) {
         let mirror = remoteSync.transcript(for: r.cliSessionID)
+        let mirrorMtime = mirror.flatMap {
+            try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }
         let activity = mirror.map { TranscriptReader.latestActivity(in: $0) }
         var total = 0
-        if let mirror,
-           let mtime = try? mirror.resourceValues(forKeys: [.contentModificationDateKey])
-               .contentModificationDate {
-            total = tokens(sessionID: r.cliSessionID, url: mirror, mtime: mtime)
+        if let mirror, let mirrorMtime {
+            total = tokens(sessionID: r.cliSessionID, url: mirror, mtime: mirrorMtime)
         }
 
-        // Liveness comes from Desktop's store, never the mirror's mtime — the latter
-        // records when we last fetched, not when the agent last did something.
-        let working = Date().timeIntervalSince(r.updatedAt) < workingWindow
+        // Liveness comes from the mirror, which is only written when the remote transcript
+        // actually grew — so its mtime tracks the agent within one sync interval. Desktop's
+        // store is the fallback until the first sync lands, but it can't drive this: it
+        // goes minutes without an update mid-turn, which would read as the agent having
+        // stopped and announce a completion while it is still working.
+        let lastActivity = mirrorMtime ?? r.updatedAt
+        let working = Date().timeIntervalSince(lastActivity) < workingWindow
 
         store.reconcileAnsweredQuestion(r.id, current: activity?.question)
         let existing = store.sessions.first { $0.id == r.id }
@@ -352,14 +357,17 @@ final class IdeWatcher {
             }
         }
         announceIfNeeded(newlySurfaced, id: r.id)
-        notifyIfSettled(r.id, quietSince: r.updatedAt, working: working)
+        // A failing sync freezes the mirror, and that silence isn't the agent finishing —
+        // don't let an unreachable host announce a completion.
+        if remoteSync.failure(for: r.cliSessionID) == nil {
+            notifyIfSettled(r.id, quietSince: lastActivity, working: working)
+        }
     }
 
     /// The "done" notification for an SSH session. Same rule as the hook-free local path:
     /// a turn finishing shows up as the session going quiet, so only notify once it has
     /// been quiet past `settledWindow` and reset when it resumes, so each turn's completion
-    /// notifies exactly once. Quiet is measured from Desktop's store rather than the
-    /// mirror, since the mirror's mtime records when we last fetched.
+    /// notifies exactly once.
     private func notifyIfSettled(_ id: UUID, quietSince: Date, working: Bool) {
         if working {
             doneNotified.remove(id)
