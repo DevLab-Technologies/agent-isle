@@ -15,9 +15,21 @@ struct CollapsedIsland: View {
         focus?.subAgents.filter(\.working).count ?? 0
     }
 
-    /// Wider ears so the session title has real room before it truncates (the old 148
-    /// clipped most repo·branch titles after ~14 chars).
-    private let earWidth: CGFloat = 176
+    /// Ears grow with their content up to this cap, past which the title truncates.
+    /// A fixed ear width made the pill ~570pt wide even for a short title, which crowded
+    /// (and on busier menu bars covered) the status icons flanking the notch.
+    private let maxEarWidth: CGFloat = 176
+    /// Keeps the pill a recognisable island rather than a sliver when there's little to show.
+    private let minEarWidth: CGFloat = 30
+
+    /// Natural width of the wider of the two ears, measured off-screen (see `earMeasurement`).
+    @State private var measuredEarWidth: CGFloat = 0
+
+    /// Both ears share one width so the transparent center gap stays centered in the pill —
+    /// and therefore over the physical notch, since the window is centered on screen.
+    private var earWidth: CGFloat {
+        min(maxEarWidth, max(minEarWidth, measuredEarWidth))
+    }
 
     /// Color of the "needs you" signal — amber for a pending permission, purple for a
     /// question, teal for a plan review, matching the per-status colors used elsewhere.
@@ -50,7 +62,27 @@ struct CollapsedIsland: View {
             NotchShape(bottomRadius: 16)
                 .stroke(Theme.Fill.hairline, lineWidth: 0.5)
         )
+        .background(earMeasurement)
+        .onPreferenceChange(EarWidthKey.self) { measuredEarWidth = $0 }
         .fixedSize()
+    }
+
+    /// Renders both ears at their natural width, hidden and outside the visible layout, so
+    /// `earWidth` can hug whichever side needs more room. Lives in a `.background` so it
+    /// never contributes to the pill's own size; the clusters here don't read `earWidth`,
+    /// so there's no measurement feedback loop.
+    private var earMeasurement: some View {
+        ZStack {
+            leftCluster
+            rightCluster
+        }
+        .fixedSize()
+        .hidden()
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: EarWidthKey.self, value: proxy.size.width)
+            }
+        )
     }
 
     /// Clean mode strips the pill back to the focus session's title and the count; detailed
@@ -110,6 +142,14 @@ struct CollapsedIsland: View {
                     .overlay(Capsule().stroke(Theme.Fill.hairline, lineWidth: 0.5))
             }
         }
+    }
+}
+
+/// Carries the natural width of the collapsed pill's widest ear up to `CollapsedIsland`.
+private struct EarWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
