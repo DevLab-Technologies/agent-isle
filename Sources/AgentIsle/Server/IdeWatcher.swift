@@ -31,6 +31,10 @@ final class IdeWatcher {
     /// for the other hook-free adapters.
     private let maxRemoteSessions = 5
 
+    /// Mirrors SSH sessions' transcripts locally so they get the same transcript-derived
+    /// detail (activity, tokens, todos, pending questions) as local sessions.
+    private let remoteSync = RemoteTranscriptSync()
+
     private var trackedIDs: Set<UUID> = []
     /// Sessions we've already posted a "done" notification for during their current quiet
     /// period; cleared when the session resumes working, so each completion notifies once.
@@ -247,30 +251,18 @@ final class IdeWatcher {
         // record. Keyed by CLI session id, the same as a transcript-discovered session, so
         // a session Desktop later mirrors into `projects/ssh-<id>/` is already in `found`
         // here and keeps its richer transcript-derived card instead of being overwritten.
+        var liveRemoteIDs: Set<String> = []
         for r in RemoteSessions.scan(activeWindow: activeWindow, limit: maxRemoteSessions)
         where !found.contains(r.id) {
             found.insert(r.id)
             trackedIDs.insert(r.id)
-            let working = Date().timeIntervalSince(r.updatedAt) < workingWindow
-            let lastMessage = r.host.map { "SSH · \($0)" } ?? "Remote session"
-            if store.sessions.contains(where: { $0.id == r.id }) {
-                store.update(id: r.id) { s in
-                    s.title = r.title
-                    s.lastMessage = lastMessage
-                    if let model = r.model { s.model = model }
-                    s.workspacePath = r.cwd
-                    s.status = working ? .working : .idle
-                    s.updatedAt = r.updatedAt
-                }
-            } else {
-                if store.demoMode { store.stopDemo(); store.clearAll() }
-                store.upsert(AgentSession(
-                    id: r.id, agent: .claude, title: r.title, terminal: "Desktop",
-                    lastMessage: lastMessage, status: working ? .working : .idle,
-                    startedAt: r.startedAt, updatedAt: r.updatedAt, model: r.model,
-                    workspacePath: r.cwd, cliSessionID: r.cliSessionID))
-            }
+            liveRemoteIDs.insert(r.cliSessionID)
+            // Pull the transcript across so the card can carry what the store doesn't
+            // record. Returns immediately; the mirror lands on a later scan.
+            remoteSync.syncIfNeeded(r)
+            apply(remote: r)
         }
+        remoteSync.prune(live: liveRemoteIDs)
 
         pruneMissing(current: found)
         // Forget completion state for sessions that are no longer live, so a session id
@@ -282,18 +274,102 @@ final class IdeWatcher {
     /// the file has changed, the recount (a multi-MB read + JSON parse) runs off the main
     /// thread and updates the session when it lands — so the 2s scan never blocks the UI on
     /// a large, actively-growing transcript. The stale (or zero) value is shown until then.
-    private func tokens(for c: Candidate) -> Int {
-        if let cached = tokenCache[c.sessionID], cached.mtime == c.mtime {
-            return cached.tokens
+    /// Create or refresh the card for a session running over SSH, folding in whatever the
+    /// mirrored transcript provides. Until the first sync lands — or if it fails — the card
+    /// still shows what Desktop's store knows, so the session is never invisible.
+    private func apply(remote r: RemoteSession) {
+        let mirror = remoteSync.transcript(for: r.cliSessionID)
+        let activity = mirror.map { TranscriptReader.latestActivity(in: $0) }
+        var total = 0
+        if let mirror,
+           let mtime = try? mirror.resourceValues(forKeys: [.contentModificationDateKey])
+               .contentModificationDate {
+            total = tokens(sessionID: r.cliSessionID, url: mirror, mtime: mtime)
         }
-        refreshTokens(for: c)
-        return tokenCache[c.sessionID]?.tokens ?? 0
+
+        // Liveness comes from Desktop's store, never the mirror's mtime — the latter
+        // records when we last fetched, not when the agent last did something.
+        let working = Date().timeIntervalSince(r.updatedAt) < workingWindow
+
+        store.reconcileAnsweredQuestion(r.id, current: activity?.question)
+        let existing = store.sessions.first { $0.id == r.id }
+        let question: AgentQuestion? = {
+            guard let q = activity?.question,
+                  !store.wasTranscriptQuestionAnswered(r.id, q) else { return nil }
+            return q
+        }()
+        let newlySurfaced = question != nil && existing?.question != question
+        // Prefer the transcript's activity line; fall back to naming the host, or to why
+        // the sync failed — a card stuck on "SSH · host" shouldn't look like a quiet agent.
+        let detail = activity?.text
+            ?? remoteSync.failure(for: r.cliSessionID).map { "SSH · \(r.host) — \($0)" }
+            ?? "SSH · \(r.host)"
+        let status: SessionStatus = question != nil ? .asking : (working ? .working : .idle)
+
+        guard existing != nil else {
+            if store.demoMode { store.stopDemo(); store.clearAll() }
+            store.upsert(AgentSession(
+                id: r.id, agent: .claude, title: r.title, terminal: "Desktop",
+                lastMessage: question?.summary ?? detail, status: status,
+                startedAt: r.startedAt, updatedAt: r.updatedAt, question: question,
+                tasks: TaskList(items: activity?.tasks ?? []), tokens: total,
+                model: activity?.model ?? r.model, workspacePath: r.cwd,
+                transcriptURL: mirror, cliSessionID: r.cliSessionID))
+            announceIfNeeded(newlySurfaced, id: r.id)
+            return
+        }
+
+        store.update(id: r.id) { s in
+            s.title = r.title
+            s.workspacePath = r.cwd
+            s.updatedAt = r.updatedAt
+            s.transcriptURL = mirror
+            s.terminal = "Desktop"
+            s.terminalBundleID = nil   // let Jumper resolve via the deep-link
+            if total > 0 { s.tokens = total }
+            // Only overwrite when this scan actually carried a value — a tail without an
+            // assistant turn or a TodoWrite shouldn't wipe what we already know.
+            if let model = activity?.model ?? r.model { s.model = model }
+            if let tasks = activity?.tasks, !tasks.isEmpty { s.tasks = TaskList(items: tasks) }
+
+            if let q = question {
+                s.question = q
+                s.status = .asking
+                s.lastMessage = q.summary
+            } else {
+                if s.question?.source == .transcript { s.question = nil }
+                s.lastMessage = detail
+                if s.permission == nil && s.question == nil { s.status = status }
+            }
+        }
+        announceIfNeeded(newlySurfaced, id: r.id)
     }
 
-    private func refreshTokens(for c: Candidate) {
-        guard !tokenInFlight.contains(c.sessionID) else { return }
-        tokenInFlight.insert(c.sessionID)
-        let (url, sessionID, mtime) = (c.url, c.sessionID, c.mtime)
+    private func announceIfNeeded(_ surfaced: Bool, id: UUID) {
+        guard surfaced else { return }
+        SoundPlayer.shared.play(.attention)
+        if let session = store.sessions.first(where: { $0.id == id }) {
+            VoiceAnnouncer.shared.announce(session: session, kind: .question)
+        }
+    }
+
+    private func tokens(for c: Candidate) -> Int {
+        tokens(sessionID: c.sessionID, url: c.url, mtime: c.mtime)
+    }
+
+    /// Same caching for any transcript, local or a remote one mirrored by
+    /// `RemoteTranscriptSync` — both are just a JSONL file on disk by this point.
+    private func tokens(sessionID: String, url: URL, mtime: Date) -> Int {
+        if let cached = tokenCache[sessionID], cached.mtime == mtime {
+            return cached.tokens
+        }
+        refreshTokens(sessionID: sessionID, url: url, mtime: mtime)
+        return tokenCache[sessionID]?.tokens ?? 0
+    }
+
+    private func refreshTokens(sessionID: String, url: URL, mtime: Date) {
+        guard !tokenInFlight.contains(sessionID) else { return }
+        tokenInFlight.insert(sessionID)
         let id = UUID.deterministic(from: sessionID)
         DispatchQueue.global(qos: .utility).async {
             let total = TranscriptReader.sessionTokens(in: url)

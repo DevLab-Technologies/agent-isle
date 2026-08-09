@@ -5,11 +5,30 @@ struct RemoteSession {
     let id: UUID              // deterministic from `cliSessionID` — see `RemoteSessions`
     let cliSessionID: String  // CLI session uuid, used for the `claude://resume` deep link
     let title: String
-    let host: String?         // host part of `sshHost`, e.g. "ezpayments-production"
     let cwd: String?          // working directory *on the remote host*
     let model: String?
     let startedAt: Date
     let updatedAt: Date
+    let ssh: SSHTarget        // how to reach the host, for `RemoteTranscriptSync`
+    /// Absolute path of the transcript *on the remote host*, as Desktop recorded it.
+    /// Preferred over locating the file ourselves: it is exact, and it handles hosts where
+    /// the transcript isn't under the SSH user's home (a root session, a git worktree).
+    let remoteTranscriptPath: String?
+
+    /// Display name of the host, without the `user@` prefix.
+    var host: String { ssh.displayHost }
+}
+
+/// Everything needed to open an SSH connection to the host a session runs on, as Claude
+/// Desktop recorded it.
+struct SSHTarget: Equatable {
+    let destination: String     // "user@host" as Desktop stored it
+    let port: Int?
+    let identityFile: String?   // may be tilde-relative, e.g. "~/.ssh/id_ed25519"
+
+    var displayHost: String {
+        destination.split(separator: "@").last.map(String.init) ?? destination
+    }
 }
 
 /// Discovers Claude Code sessions running over SSH, which `IdeWatcher` cannot see.
@@ -65,7 +84,8 @@ enum RemoteSessions {
     /// Read one session file, returning nil unless it describes a live remote session.
     private static func parse(_ url: URL, mtime: Date) -> RemoteSession? {
         guard let obj = TranscriptReader.readJSONObject(url, maxBytes: 4 * 1024 * 1024),
-              obj["sshConfig"] is [String: Any],           // absent ⇒ runs locally, IdeWatcher has it
+              let sshConfig = obj["sshConfig"] as? [String: Any], // absent ⇒ runs locally, IdeWatcher has it
+              let ssh = target(from: sshConfig),
               (obj["isArchived"] as? Bool) != true,
               // The CLI session id keys the card. It matches the mirrored transcript's
               // filename, so a session that *does* get mirrored later reuses this id
@@ -83,18 +103,24 @@ enum RemoteSessions {
             id: UUID.deterministic(from: cliSessionID),
             cliSessionID: cliSessionID,
             title: title,
-            host: host(from: obj["sshConfig"] as? [String: Any]),
             cwd: cwd,
             model: ModelName.pretty(obj["model"] as? String),
             startedAt: epochMillis(obj["createdAt"]) ?? updatedAt,
-            updatedAt: updatedAt)
+            updatedAt: updatedAt,
+            ssh: ssh,
+            remoteTranscriptPath: (obj["sshRemoteTranscriptPath"] as? String)
+                .flatMap { $0.isEmpty ? nil : $0 })
     }
 
-    /// The bare hostname from an `sshConfig`, dropping the `user@` prefix so the card
-    /// shows "ezpayments-production" rather than "elkhayyat@ezpayments-production".
-    private static func host(from config: [String: Any]?) -> String? {
-        guard let raw = config?["sshHost"] as? String, !raw.isEmpty else { return nil }
-        return raw.split(separator: "@").last.map(String.init) ?? raw
+    /// The SSH connection details, or nil when there's no usable host — without one the
+    /// session can't be reached, so it isn't a remote session we can do anything with.
+    static func target(from config: [String: Any]) -> SSHTarget? {
+        guard let destination = (config["sshHost"] as? String)?
+            .trimmingCharacters(in: .whitespaces), !destination.isEmpty else { return nil }
+        let identity = (config["sshIdentityFile"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return SSHTarget(destination: destination,
+                         port: config["sshPort"] as? Int,
+                         identityFile: identity)
     }
 
     /// Desktop records timestamps as milliseconds since the epoch, as a JSON number.
