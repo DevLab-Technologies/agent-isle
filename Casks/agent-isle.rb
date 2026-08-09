@@ -1,6 +1,6 @@
 cask "agent-isle" do
-  version "1.4"
-  sha256 "2ff21021c35bdf265f5f4c7ef11d594df3346802a66935f54edf185f59355edb"
+  version "1.6"
+  sha256 "d424848b7844d4d314c2773b54bbbc7b93f95e40242dbb5017e1c97b0175aa2c"
 
   url "https://github.com/DevLab-Technologies/agent-isle/releases/download/v#{version}/Agent-Isle.zip",
       verified: "github.com/DevLab-Technologies/agent-isle/"
