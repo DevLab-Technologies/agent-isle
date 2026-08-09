@@ -101,10 +101,13 @@ enum Jumper {
 
     /// The `claude://resume?session=<cli-session-id>` link that opens this session in
     /// Claude Desktop. The CLI session id is a UUID, taken from the transcript filename
-    /// (`~/.claude/projects/<slug>/<uuid>.jsonl`); nil when there's no UUID-named transcript.
+    /// (`~/.claude/projects/<slug>/<uuid>.jsonl`), or carried on the session itself when
+    /// there is no local transcript (a session running over SSH — see `RemoteSessions`).
+    /// Nil when neither yields a UUID.
     static func claudeResumeURL(for session: AgentSession) -> URL? {
-        guard let stem = session.transcriptURL?.deletingPathExtension().lastPathComponent,
-              UUID(uuidString: stem) != nil else { return nil }
+        let stem = session.transcriptURL?.deletingPathExtension().lastPathComponent
+            ?? session.cliSessionID
+        guard let stem, UUID(uuidString: stem) != nil else { return nil }
         return URL(string: "claude://resume?session=\(stem)")
     }
 

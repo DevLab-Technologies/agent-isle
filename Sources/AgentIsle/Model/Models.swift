@@ -380,6 +380,10 @@ struct AgentSession: Identifiable, Equatable {
     var workspacePath: String?  // cwd, used by "Jump" to focus the session's app
     var terminalBundleID: String?  // real host app bundle id (from the hook's TERM_PROGRAM)
     var transcriptURL: URL?     // on-disk conversation file (Claude/Grok/Copilot), for the live chat view
+    /// CLI session id for a session with no local transcript (Claude Code over SSH), so
+    /// "Jump" can still deep-link to the exact conversation. Nil when `transcriptURL`
+    /// already carries the id in its filename.
+    var cliSessionID: String?
 
     init(id: UUID = UUID(),
          agent: AgentKind,
@@ -398,10 +402,12 @@ struct AgentSession: Identifiable, Equatable {
          subAgents: [SubAgent] = [],
          workspacePath: String? = nil,
          terminalBundleID: String? = nil,
-         transcriptURL: URL? = nil) {
+         transcriptURL: URL? = nil,
+         cliSessionID: String? = nil) {
         self.workspacePath = workspacePath
         self.terminalBundleID = terminalBundleID
         self.transcriptURL = transcriptURL
+        self.cliSessionID = cliSessionID
         self.id = id
         self.agent = agent
         self.title = title
