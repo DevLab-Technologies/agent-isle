@@ -203,10 +203,10 @@ final class Updater: ObservableObject {
         alert.messageText = "Update available: Agent Isle \(release.info.cleanVersion)"
         var info = "You're currently on \(currentVersion)."
         if release.info.isPrerelease { info += " This is a pre-release build." }
-        if !release.notes.isEmpty {
-            info += "\n\n" + String(release.notes.prefix(500))
-        }
         alert.informativeText = info
+        // Notes are Markdown: render them into a scrollable accessory view rather than
+        // dumping the source into `informativeText`, which can't be styled or scrolled.
+        alert.accessoryView = Self.notesView(release.notes)
         alert.addButton(withTitle: "Install Update")
         alert.addButton(withTitle: "Skip This Version")
         alert.addButton(withTitle: "Later")
@@ -220,6 +220,54 @@ final class Updater: ObservableObject {
         default:
             break   // Later — we'll offer again on the next check
         }
+    }
+
+    /// Release notes as a scrollable, selectable text view sized to its content (capped, so a
+    /// long changelog scrolls instead of growing the alert off-screen). Nil when there are none.
+    private static func notesView(_ notes: String) -> NSView? {
+        let rendered = ReleaseNotes.attributed(notes)
+        guard rendered.length > 0 else { return nil }
+
+        let outerWidth: CGFloat = 440
+        let maxHeight: CGFloat = 260
+        // Leave room for a legacy (always-visible) scroller so long notes never clip.
+        let textWidth = outerWidth - 16
+
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: textWidth, height: maxHeight))
+        text.isEditable = false
+        text.isSelectable = true
+        text.drawsBackground = false
+        text.textContainerInset = .zero
+        text.textContainer?.lineFragmentPadding = 0
+        text.textContainer?.containerSize = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+        text.textContainer?.widthTracksTextView = true
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.minSize = NSSize(width: textWidth, height: 0)
+        text.maxSize = NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+        text.autoresizingMask = [.width]
+        text.isAutomaticLinkDetectionEnabled = false   // links come from the Markdown itself
+        text.linkTextAttributes = [
+            .foregroundColor: NSColor.linkColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .cursor: NSCursor.pointingHand,
+        ]
+        text.textStorage?.setAttributedString(rendered)
+
+        var contentHeight = maxHeight
+        if let layout = text.layoutManager, let container = text.textContainer {
+            layout.ensureLayout(for: container)
+            contentHeight = ceil(layout.usedRect(for: container).height)
+        }
+        let height = min(max(contentHeight, 20), maxHeight)
+        text.frame = NSRect(x: 0, y: 0, width: textWidth, height: max(contentHeight, height))
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: outerWidth, height: height))
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = contentHeight > height
+        scroll.autohidesScrollers = true
+        scroll.documentView = text
+        return scroll
     }
 
     // MARK: - Download & install
