@@ -34,11 +34,25 @@ final class RemoteTranscriptSync {
     /// token total for not pulling a huge file over the network in one go.
     private let initialByteCap = 8 * 1024 * 1024
 
+    /// Ceiling on the backoff after repeated failures — long enough that an unreachable
+    /// host costs almost nothing, short enough that one coming back is noticed promptly.
+    private let maxRetryInterval: TimeInterval = 300
+
     private struct State {
-        var offset: Int = 0        // bytes already mirrored
+        var offset: Int = 0        // bytes of the remote file already accounted for
         var lastSync: Date = .distantPast
         var inFlight = false
         var failure: String?       // last error, shown on the card so failures aren't silent
+        var consecutiveFailures = 0
+    }
+
+    /// How long to wait before the next attempt: the normal interval, doubling per
+    /// consecutive failure. Without this an unreachable host is retried at full cadence for
+    /// as long as its card is live, each attempt spawning an `ssh` that blocks on connect.
+    private func retryInterval(after state: State) -> TimeInterval {
+        guard state.consecutiveFailures > 0 else { return interval }
+        let doubled = interval * pow(2, Double(min(state.consecutiveFailures, 8)))
+        return min(doubled, maxRetryInterval)
     }
 
     private var states: [String: State] = [:]
@@ -63,8 +77,9 @@ final class RemoteTranscriptSync {
     /// Start a sync for `session` if one is due and none is running. Returns immediately.
     func syncIfNeeded(_ session: RemoteSession) {
         let id = session.cliSessionID
-        var state = states[id] ?? State()
-        guard !state.inFlight, Date().timeIntervalSince(state.lastSync) >= interval else { return }
+        var state = states[id] ?? restoredState(id)
+        guard !state.inFlight,
+              Date().timeIntervalSince(state.lastSync) >= retryInterval(after: state) else { return }
         state.inFlight = true
         state.lastSync = Date()
         states[id] = state
@@ -94,7 +109,7 @@ final class RemoteTranscriptSync {
         }
         let files = (try? FileManager.default.contentsOfDirectory(
             at: cacheDir, includingPropertiesForKeys: nil)) ?? []
-        for file in files where file.pathExtension == "jsonl" {
+        for file in files where file.pathExtension == "jsonl" || file.pathExtension == "offset" {
             let id = file.deletingPathExtension().lastPathComponent
             guard !live.contains(id), states[id]?.inFlight != true else { continue }
             try? FileManager.default.removeItem(at: file)
@@ -116,13 +131,16 @@ final class RemoteTranscriptSync {
         switch result {
         case .failed(let message):
             state.failure = message
+            state.consecutiveFailures += 1
         case .data(let size, let delta):
             state.failure = nil
+            state.consecutiveFailures = 0
             // The remote file shrank (a new session reusing the id, or a truncated file):
             // our mirror no longer matches, so start over on the next pass.
             if size < requestedOffset {
                 state.offset = 0
                 try? FileManager.default.removeItem(at: dest)
+                try? FileManager.default.removeItem(at: offsetURL(id))
                 return
             }
             guard !delta.isEmpty else { return }
@@ -136,6 +154,7 @@ final class RemoteTranscriptSync {
                 // The mirror vanished under us (manual delete, cache cleanup). Re-fetch
                 // whole rather than appending a delta onto nothing.
                 state.offset = 0
+                try? FileManager.default.removeItem(at: offsetURL(id))
                 return
             }
             // Resume from the file's end, not from how many bytes we received. On the
@@ -143,11 +162,39 @@ final class RemoteTranscriptSync {
             // hold only the tail, so counting the delta would resume mid-file and splice
             // an unrelated stretch into the mirror.
             state.offset = size
+            persist(offset: size, for: id)
         }
     }
 
     private func cacheURL(_ cliSessionID: String) -> URL {
         cacheDir.appendingPathComponent("\(cliSessionID).jsonl")
+    }
+
+    /// The mirror's resume point, stored beside it so a relaunch continues where the last
+    /// run stopped instead of re-downloading every live session's transcript.
+    ///
+    /// It has to be recorded rather than inferred: a mirror first synced past
+    /// `initialByteCap` holds only the tail, so its own file size is *smaller* than the
+    /// remote offset it stands for, and resuming from that size would splice an unrelated
+    /// stretch of the remote file into it.
+    private func offsetURL(_ cliSessionID: String) -> URL {
+        cacheDir.appendingPathComponent("\(cliSessionID).offset")
+    }
+
+    /// State for a session we haven't synced yet this run, picking up a mirror left behind
+    /// by a previous one. Falls back to a full re-fetch if either piece is missing.
+    private func restoredState(_ id: String) -> State {
+        var state = State()
+        guard FileManager.default.fileExists(atPath: cacheURL(id).path),
+              let text = try? String(contentsOf: offsetURL(id), encoding: .utf8),
+              let saved = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              saved > 0 else { return state }
+        state.offset = saved
+        return state
+    }
+
+    private func persist(offset: Int, for id: String) {
+        try? String(offset).write(to: offsetURL(id), atomically: true, encoding: .utf8)
     }
 
     // MARK: - Fetching

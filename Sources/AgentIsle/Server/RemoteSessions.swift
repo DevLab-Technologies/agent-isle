@@ -83,7 +83,11 @@ enum RemoteSessions {
 
     /// Read one session file, returning nil unless it describes a live remote session.
     private static func parse(_ url: URL, mtime: Date) -> RemoteSession? {
-        guard let obj = TranscriptReader.readJSONObject(url, maxBytes: 4 * 1024 * 1024),
+        // Most files here describe *local* sessions, and each carries a large
+        // `remoteMcpServersConfig` blob — so test for the marker in the raw bytes and skip
+        // the JSON decode entirely for those. This runs on the main actor every poll.
+        guard let data = readCapped(url), data.range(of: Self.sshConfigMarker) != nil,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let sshConfig = obj["sshConfig"] as? [String: Any], // absent ⇒ runs locally, IdeWatcher has it
               let ssh = target(from: sshConfig),
               (obj["isArchived"] as? Bool) != true,
@@ -110,6 +114,15 @@ enum RemoteSessions {
             ssh: ssh,
             remoteTranscriptPath: (obj["sshRemoteTranscriptPath"] as? String)
                 .flatMap { $0.isEmpty ? nil : $0 })
+    }
+
+    private static let sshConfigMarker = Data("\"sshConfig\"".utf8)
+
+    /// Read a session file, capped so a pathological one can't be pulled into memory whole.
+    private static func readCapped(_ url: URL, maxBytes: Int = 4 * 1024 * 1024) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: maxBytes)
     }
 
     /// The SSH connection details, or nil when there's no usable host — without one the
