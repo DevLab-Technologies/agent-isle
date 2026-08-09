@@ -27,6 +27,9 @@ final class IdeWatcher {
     private let settledWindow: TimeInterval = 45
     /// Never show more than this many sessions at once.
     private let maxSessions = 10
+    /// Cap on SSH sessions surfaced from Desktop's store, matching the per-agent cap used
+    /// for the other hook-free adapters.
+    private let maxRemoteSessions = 5
 
     private var trackedIDs: Set<UUID> = []
     /// Sessions we've already posted a "done" notification for during their current quiet
@@ -236,6 +239,36 @@ final class IdeWatcher {
                     lastMessage: e.lastMessage, status: working ? .working : .idle,
                     startedAt: e.mtime, updatedAt: e.mtime, model: e.model, workspacePath: e.cwd,
                     transcriptURL: e.historyURL))
+            }
+        }
+
+        // Claude Code sessions running over SSH. Their transcript lives on the remote host,
+        // so the poll above can't see them — Desktop's session store is the only local
+        // record. Keyed by CLI session id, the same as a transcript-discovered session, so
+        // a session Desktop later mirrors into `projects/ssh-<id>/` is already in `found`
+        // here and keeps its richer transcript-derived card instead of being overwritten.
+        for r in RemoteSessions.scan(activeWindow: activeWindow, limit: maxRemoteSessions)
+        where !found.contains(r.id) {
+            found.insert(r.id)
+            trackedIDs.insert(r.id)
+            let working = Date().timeIntervalSince(r.updatedAt) < workingWindow
+            let lastMessage = r.host.map { "SSH · \($0)" } ?? "Remote session"
+            if store.sessions.contains(where: { $0.id == r.id }) {
+                store.update(id: r.id) { s in
+                    s.title = r.title
+                    s.lastMessage = lastMessage
+                    if let model = r.model { s.model = model }
+                    s.workspacePath = r.cwd
+                    s.status = working ? .working : .idle
+                    s.updatedAt = r.updatedAt
+                }
+            } else {
+                if store.demoMode { store.stopDemo(); store.clearAll() }
+                store.upsert(AgentSession(
+                    id: r.id, agent: .claude, title: r.title, terminal: "Desktop",
+                    lastMessage: lastMessage, status: working ? .working : .idle,
+                    startedAt: r.startedAt, updatedAt: r.updatedAt, model: r.model,
+                    workspacePath: r.cwd, cliSessionID: r.cliSessionID))
             }
         }
 

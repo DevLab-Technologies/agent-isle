@@ -23,7 +23,8 @@ Pure Swift, no Electron. Runs as a lightweight menu-bar accessory under 100 MB R
 - **Notch-anchored island** — a black pill hugging the notch that expands on hover or
   click into a full panel of every running agent session.
 - **Multi-agent, hook-free monitoring** — reads each tool's own session history:
-  - **Claude Code** — terminal, VS Code, Cursor, and Desktop sessions
+  - **Claude Code** — terminal, VS Code, Cursor, and Desktop sessions, including Desktop
+    sessions running on a remote host over SSH
   - **Cursor CLI** (`cursor-agent`) — read straight from its `~/.cursor/chats` store
   - **Grok CLI** and **GitHub Copilot CLI**
 - **Live status** — each session shows working / idle, its latest activity line, git
@@ -102,6 +103,13 @@ toggle demo/sound from the gear menu in the expanded island.
 bash Scripts/install-hooks.sh   # adds hooks to ~/.claude/settings.json
 bash Scripts/uninstall-hooks.sh # remove them (monitoring still works)
 ```
+
+Claude Desktop sessions running over SSH are monitored too, read from Desktop's own
+session store — the agent runs on the remote host, so its transcript never reaches this
+Mac. Those cards show title, host, model and working/idle, and clicking one still jumps to
+the conversation, but the transcript-derived details (activity line, tokens, todo list) and
+notch approvals aren't available: hooks would have to run on the remote host, where
+`localhost:4711` isn't this app.
 
 **Cursor CLI** (`cursor-agent`) — monitoring works with no setup (Agent Isle reads the
 per-session SQLite `store.db` under `~/.cursor/chats`). To also approve shell, MCP, and
