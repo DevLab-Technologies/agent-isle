@@ -78,6 +78,10 @@ struct CollapsedIsland: View {
         }
         .fixedSize()
         .hidden()
+        // `.hidden()` stops drawing, not instantiation: these clusters still run their
+        // `onAppear`, so without this flag the pill would drive a second, permanently
+        // invisible copy of every repeating animation for as long as the app is up.
+        .environment(\.isMeasuringIsland, true)
         .background(
             GeometryReader { proxy in
                 Color.clear.preference(key: EarWidthKey.self, value: proxy.size.width)
@@ -145,6 +149,19 @@ struct CollapsedIsland: View {
     }
 }
 
+/// True inside the collapsed pill's off-screen measuring pass, so views that would start a
+/// perpetual animation on appear can sit that copy out.
+private struct IsMeasuringIslandKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    fileprivate var isMeasuringIsland: Bool {
+        get { self[IsMeasuringIslandKey.self] }
+        set { self[IsMeasuringIslandKey.self] = newValue }
+    }
+}
+
 /// Carries the natural width of the collapsed pill's widest ear up to `CollapsedIsland`.
 private struct EarWidthKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -156,6 +173,7 @@ private struct EarWidthKey: PreferenceKey {
 struct StatusDot: View {
     let status: SessionStatus
     @State private var pulse = false
+    @Environment(\.isMeasuringIsland) private var isMeasuring
 
     var body: some View {
         Circle()
@@ -164,7 +182,7 @@ struct StatusDot: View {
             .shadow(color: status.color.opacity(0.7), radius: pulse ? 4 : 1)
             .scaleEffect(status == .working && pulse ? 1.25 : 1)
             .onAppear {
-                if status == .working || status == .waiting {
+                if !isMeasuring, status == .working || status == .waiting {
                     withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                         pulse = true
                     }
@@ -192,6 +210,7 @@ struct CountBadge: View {
 struct LivePulse: View {
     let color: Color
     @State private var animate = false
+    @Environment(\.isMeasuringIsland) private var isMeasuring
 
     var body: some View {
         ZStack {
@@ -206,6 +225,7 @@ struct LivePulse: View {
         }
         .frame(width: 15, height: 15)
         .onAppear {
+            guard !isMeasuring else { return }
             withAnimation(.easeOut(duration: 1.1).repeatForever(autoreverses: false)) {
                 animate = true
             }
