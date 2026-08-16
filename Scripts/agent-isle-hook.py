@@ -228,8 +228,13 @@ def main():
     except Exception:
         hook = {}
     if os.environ.get("AGENT_ISLE_DEBUG") == "1":
+        # Private path + mode: payloads include prompts and tool inputs.
         try:
-            with open("/tmp/agent-isle-hook-debug.jsonl", "a") as _f:
+            debug_dir = os.path.join(os.path.expanduser("~"), ".agent-isle")
+            os.makedirs(debug_dir, mode=0o700, exist_ok=True)
+            path = os.path.join(debug_dir, "hook-debug.jsonl")
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a") as _f:
                 _f.write(kind + " " + raw + "\n")
         except Exception:
             pass
