@@ -171,9 +171,19 @@ struct PermissionRequest: Identifiable, Equatable {
         self.previewLines = previewLines
     }
 
-    /// Signature used by "Always Allow": the tool, plus the command for Bash so remembering
-    /// is per-command (a bare tool like Edit remembers the whole tool for the session).
-    var allowKey: String { "\(toolName)|\(command ?? "")" }
+    /// Signature used by "Always Allow". Includes every available discriminator so the
+    /// remembered scope matches what the card showed:
+    ///  - Bash → per-command (`Bash|cmd:ls`)
+    ///  - Edit/Write → per-path (`Edit|file:src/a.swift`)
+    ///  - both (rare) → both parts
+    ///  - bare tool → `Tool|` (still tool-wide, only when no command/path was supplied)
+    var allowKey: String {
+        var parts = [toolName]
+        if let command, !command.isEmpty { parts.append("cmd:\(command)") }
+        if let filePath, !filePath.isEmpty { parts.append("file:\(filePath)") }
+        if parts.count == 1 { parts.append("") }  // keep a trailing "|" for bare tools
+        return parts.joined(separator: "|")
+    }
 }
 
 struct DiffLine: Identifiable, Equatable {
