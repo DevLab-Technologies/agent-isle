@@ -25,17 +25,21 @@ final class EventServer {
     private static let headerTerminator = Data("\r\n\r\n".utf8)
 
     private let store: SessionStore
-    /// Shared secret required on every request. Injected for tests; production loads
-    /// (or creates) `~/.agent-isle/token`.
-    private let authToken: String
+    /// Test seam only. Production (`nil`) re-reads `~/.agent-isle/token` per request so a
+    /// file rewrite cannot diverge from the process-lifetime snapshot. Tests inject a
+    /// token so they never touch the real home-directory file.
+    private let injectedAuthToken: String?
     private var listener: NWListener?
 
     /// Hook connections held open while waiting on a user decision, keyed by session id.
     private var pending: [UUID: NWConnection] = [:]
 
-    init(store: SessionStore, authToken: String = EventAuthToken.loadOrCreate()) {
+    init(store: SessionStore, authToken: String? = nil) {
         self.store = store
-        self.authToken = authToken
+        self.injectedAuthToken = authToken
+        if authToken == nil {
+            _ = EventAuthToken.loadOrCreate()
+        }
     }
 
     func start() {
@@ -159,8 +163,10 @@ final class EventServer {
 
     /// True when the request carries a valid `X-Agent-Isle-Token`. Extracted for unit tests.
     func isAuthorized(headerBlock: String) -> Bool {
-        Self.token(inHeaderBlock: headerBlock)
-            .map { EventAuthToken.constantTimeEqual($0, authToken) } ?? false
+        let expected = injectedAuthToken ?? EventAuthToken.read()
+        guard let expected else { return false }
+        return Self.token(inHeaderBlock: headerBlock)
+            .map { EventAuthToken.constantTimeEqual($0, expected) } ?? false
     }
 
     /// Pull the token header value from a raw HTTP header block (request line + headers).

@@ -29,7 +29,7 @@ Three cooperating layers, all under `Sources/AgentIsle/`:
 
 3. **Ingest (Server/)** — two independent input paths populate the store:
    - **Hook-free watching**: `IdeWatcher` discovers Claude Code sessions by tailing `~/.claude/projects/` transcripts (`TranscriptReader`/`TranscriptTailer` extract activity + token totals); `ExternalAgents` adapts Grok (`~/.grok/sessions`) and Copilot (`~/.copilot/history-session-state`). This is read-only and always on.
-   - **Event server**: `EventServer` is an `NWListener` HTTP server on `127.0.0.1:4711`. Any tool POSTs to `/event`. Read the module comment before touching it — see the parking model below.
+   - **Event server**: `EventServer` is an `NWListener` HTTP server on `127.0.0.1:4711`. Any tool POSTs to `/event` with header `X-Agent-Isle-Token` matching `~/.agent-isle/token` (created on first launch). Read the module comment before touching it — see the parking model below.
 
 ### The permission "parking" model (critical, non-obvious)
 

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Security
 
@@ -56,26 +57,46 @@ enum EventAuthToken {
         return diff == 0
     }
 
-    // MARK: - Internals
-
-    nonisolated private static func write(_ token: String) throws {
+    /// Create `url` if needed and force it to `0700`. `createDirectory(attributes:)` only
+    /// applies the mode when it actually creates the directory — `~/.agent-isle` already
+    /// exists at `0755` for anyone who installed hooks.
+    nonisolated static func ensurePrivateDirectory(_ url: URL = directoryURL) throws {
         let fm = FileManager.default
-        try fm.createDirectory(at: directoryURL, withIntermediateDirectories: true, attributes: [
+        try fm.createDirectory(at: url, withIntermediateDirectories: true, attributes: [
             .posixPermissions: 0o700,
         ])
-        // Atomic create with owner-only mode so a concurrent reader never sees a partial file
-        // with looser permissions.
-        let data = Data(token.utf8)
-        let tmp = directoryURL.appendingPathComponent(".\(UUID().uuidString).tmp")
-        try data.write(to: tmp, options: .atomic)
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmp.path)
-        // replaceItemAt is not available on all SDKs the same way — remove + move is fine
-        // under the private directory.
-        if fm.fileExists(atPath: tokenFileURL.path) {
-            try fm.removeItem(at: tokenFileURL)
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+    }
+
+    /// Persist `token` owner-only. `directory` is overridable so tests never touch the
+    /// real `~/.agent-isle/token`. The temp file is created `0600` via `open(O_EXCL)` —
+    /// `Data.write(.atomic)` only gives atomic replacement, not a restrictive mode.
+    nonisolated static func write(_ token: String, directory: URL = directoryURL) throws {
+        try ensurePrivateDirectory(directory)
+        let fm = FileManager.default
+        let dest = directory.appendingPathComponent("token", isDirectory: false)
+        let tmp = directory.appendingPathComponent(".\(UUID().uuidString).tmp", isDirectory: false)
+
+        let fd = tmp.path.withCString { path in
+            open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         }
-        try fm.moveItem(at: tmp, to: tokenFileURL)
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenFileURL.path)
+        guard fd >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: nil)
+        }
+        let bytes = Array(token.utf8)
+        let written = bytes.withUnsafeBytes { buf in
+            Darwin.write(fd, buf.baseAddress, buf.count)
+        }
+        close(fd)
+        guard written == bytes.count else {
+            try? fm.removeItem(at: tmp)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO), userInfo: nil)
+        }
+
+        if fm.fileExists(atPath: dest.path) {
+            try fm.removeItem(at: dest)
+        }
+        try fm.moveItem(at: tmp, to: dest)
     }
 
     nonisolated private static func randomToken() -> String {
