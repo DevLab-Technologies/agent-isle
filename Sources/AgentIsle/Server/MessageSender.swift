@@ -17,6 +17,7 @@ enum MessageSender {
         case accessibilityDenied
         case automationDenied(String)
         case couldNotFocus(String)
+        case noTargetWindow(String)
         case scriptFailed(String)
 
         /// A short, user-facing explanation shown under the input bar.
@@ -28,6 +29,8 @@ enum MessageSender {
                 return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
             case .couldNotFocus(let app):
                 return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
+            case .noTargetWindow(let app):
+                return "No open \(app) window for this session — reopen it and try again."
             case .scriptFailed(let detail):
                 return "Couldn't send: \(detail)"
             }
@@ -117,6 +120,15 @@ enum MessageSender {
             completion(.failure(.accessibilityDenied))
             return
         }
+        // Check *before* activating. `Jumper.jump` / reopen can spawn a fresh login
+        // window when the user has closed every Terminal tab — typing+Return there
+        // would execute the payload as a shell command, the hazard this PR removes.
+        // Unknown bundle (open-URL jump) skips the check, same as waitUntilFrontmost.
+        if let bundle = Jumper.targetBundleID(for: session),
+           !runningAppHasNormalWindow(bundleID: bundle) {
+            completion(.failure(.noTargetWindow(session.terminal)))
+            return
+        }
         // Bring the session's app forward, then type only once it is actually frontmost.
         // A fixed delay races the async activation (`NSWorkspace.openApplication` returns
         // before the app is front), so keystrokes could land in whatever app happened to
@@ -157,6 +169,29 @@ enum MessageSender {
             }
         }
         poll()
+    }
+
+    /// True when a running copy of `bundleID` owns at least one normal (layer-0) window.
+    /// Used to refuse keystrokes into an app the user has fully closed (Cmd-W) so we
+    /// neither report a false success nor type into a freshly spawned login shell.
+    private static func runningAppHasNormalWindow(bundleID: String) -> Bool {
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        guard let pid = apps.first(where: { !$0.isTerminated })?.processIdentifier else {
+            return false
+        }
+        guard let info = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        return ownerHasNormalWindow(pid: pid, in: info)
+    }
+
+    /// Pure predicate over a `CGWindowListCopyWindowInfo` snapshot so tests don't need a live app.
+    nonisolated static func ownerHasNormalWindow(pid: pid_t, in windows: [[String: Any]]) -> Bool {
+        windows.contains { window in
+            let owner = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+            let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue
+            return owner == pid && layer == 0
+        }
     }
 
     /// Returns true if we may post synthetic events; otherwise triggers the one-time
