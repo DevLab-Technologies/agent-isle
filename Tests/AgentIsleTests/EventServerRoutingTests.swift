@@ -4,6 +4,9 @@ import XCTest
 /// The permission short-circuit `EventServer` uses: a request routes to `.autoAllow` only
 /// when the session's prior Bypass/Always-Allow covers it, otherwise `.prompt`. Exercises
 /// the same `allowKey` → `isAutoAllowed` wiring the live socket path uses, without a socket.
+///
+/// Also covers `requestLength` — the HTTP framer that decides when a buffered read is a
+/// complete request — because a wrong length is either a crash or a hard tool denial.
 @MainActor
 final class EventServerRoutingTests: XCTestCase {
 
@@ -47,5 +50,66 @@ final class EventServerRoutingTests: XCTestCase {
         store.resolvePermission(sessionID: id, decision: .bypass)
         store.remove(id: id)
         XCTAssertEqual(server.routePermission(sessionID: id, request: req), .prompt)
+    }
+
+    // MARK: - HTTP request framing
+
+    private func httpRequest(headers: [String], body: String = "", terminate: Bool = true) -> Data {
+        var text = headers.joined(separator: "\r\n")
+        if terminate { text += "\r\n\r\n" }
+        else { text += "\r\n" }
+        return Data((text + body).utf8)
+    }
+
+    func testRequestLengthRequiresContentLength() {
+        let data = httpRequest(headers: ["POST /event HTTP/1.1", "Host: 127.0.0.1"])
+        XCTAssertEqual(EventServer.requestLength(in: data), .invalid)
+    }
+
+    func testRequestLengthAcceptsLowercasedContentLength() {
+        let body = "{}"
+        let data = httpRequest(headers: ["POST /event HTTP/1.1",
+                                         "content-length: \(body.utf8.count)"],
+                               body: body)
+        XCTAssertEqual(EventServer.requestLength(in: data), .complete(data.count))
+    }
+
+    func testRequestLengthAcceptsMixedCaseContentLength() {
+        let body = #"{"type":"status"}"#
+        let data = httpRequest(headers: ["POST /event HTTP/1.1",
+                                         "Content-Length: \(body.utf8.count)"],
+                               body: body)
+        XCTAssertEqual(EventServer.requestLength(in: data), .complete(data.count))
+    }
+
+    func testRequestLengthIncompleteWhenHeadersSplit() {
+        let data = httpRequest(headers: ["POST /event HTTP/1.1", "Content-Length: 2"],
+                               terminate: false)
+        XCTAssertEqual(EventServer.requestLength(in: data), .incompleteHeaders)
+    }
+
+    func testRequestLengthRejectsOversizeDeclaredBody() {
+        let data = httpRequest(headers: ["POST /event HTTP/1.1",
+                                         "Content-Length: \(EventServer.maxRequestSize)"])
+        XCTAssertEqual(EventServer.requestLength(in: data), .invalid)
+    }
+
+    func testRequestLengthRejectsIntMaxWithoutOverflow() {
+        let data = httpRequest(headers: ["POST /event HTTP/1.1",
+                                         "Content-Length: 9223372036854775807"])
+        XCTAssertEqual(EventServer.requestLength(in: data), .invalid)
+    }
+
+    func testRequestLengthCompleteWhenBodyMatches() {
+        let body = #"{"type":"status"}"#
+        let data = httpRequest(headers: ["POST /event HTTP/1.1",
+                                         "Content-Length: \(body.utf8.count)"],
+                               body: body)
+        XCTAssertEqual(EventServer.requestLength(in: data), .complete(data.count))
+    }
+
+    func testRequestLengthZeroBody() {
+        let data = httpRequest(headers: ["POST /event HTTP/1.1", "Content-Length: 0"])
+        XCTAssertEqual(EventServer.requestLength(in: data), .complete(data.count))
     }
 }

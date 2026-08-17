@@ -284,17 +284,18 @@ def main():
                              message=f"Wants to run {tool}")
                 result = post(event, timeout=TIMEOUT)
                 decision = result.get("decision")
+                # Only an explicit allow/deny is a decision. Missing, malformed, or
+                # error replies (bad json, request too large, parked-question free-text)
+                # must not approve — and must not hard-deny either: defer to Claude's
+                # own prompt, same as ask_question / review_plan / the outer except.
+                if decision not in ("allow", "yes", "deny", "no"):
+                    sys.exit(0)
                 allow = decision in ("allow", "yes")
-                reason = (
-                    "Decided from Agent Isle"
-                    if decision in ("allow", "yes", "deny", "no")
-                    else "Agent Isle returned an invalid approval response"
-                )
                 print(json.dumps({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "allow" if allow else "deny",
-                        "permissionDecisionReason": reason,
+                        "permissionDecisionReason": "Decided from Agent Isle",
                     }
                 }))
             else:
