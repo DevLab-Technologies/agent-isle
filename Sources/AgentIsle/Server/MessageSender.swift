@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import os
 
 /// Delivers a typed message into a running agent session's terminal.
@@ -22,6 +23,7 @@ enum MessageSender {
         case accessibilityDenied(staleGrantSuspected: Bool)
         case automationDenied(String)
         case couldNotFocus(String)
+        case noTargetWindow(String)
         case scriptFailed(String)
 
         /// A short, user-facing explanation shown under the input bar.
@@ -38,6 +40,8 @@ enum MessageSender {
                 return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
             case .couldNotFocus(let app):
                 return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
+            case .noTargetWindow(let app):
+                return "No open \(app) window for this session — reopen it and try again."
             case .scriptFailed(let detail):
                 return "Couldn't send: \(detail)"
             }
@@ -201,6 +205,15 @@ enum MessageSender {
             completion(.failure(.accessibilityDenied(staleGrantSuspected: AccessibilityPermission.shouldWarnStaleGrant)))
             return
         }
+        // Check *before* activating. `Jumper.jump` / reopen can spawn a fresh login
+        // window when the user has closed every Terminal tab — typing+Return there
+        // would execute the payload as a shell command, the hazard this PR removes.
+        // Unknown bundle (open-URL jump) skips the check, same as waitUntilFrontmost.
+        if let bundle = Jumper.targetBundleID(for: session),
+           !runningAppHasWindow(bundleID: bundle) {
+            completion(.failure(.noTargetWindow(session.terminal)))
+            return
+        }
         // Bring the session's app forward, then type only once it is actually frontmost.
         // A fixed delay races the async activation (`NSWorkspace.openApplication` returns
         // before the app is front), so keystrokes could land in whatever app happened to
@@ -244,6 +257,26 @@ enum MessageSender {
             }
         }
         poll()
+    }
+
+    /// True when a running copy of `bundleID` exposes at least one Accessibility window.
+    /// Unlike `CGWindowListCopyWindowInfo`, this excludes menu-bar surfaces, panels, and
+    /// stale compositor entries after the user closes the app's final window. Minimized
+    /// windows remain present, so Cmd-M does not prevent delivery.
+    private static func runningAppHasWindow(bundleID: String) -> Bool {
+        guard let pid = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .first(where: { !$0.isTerminated })?.processIdentifier else {
+            return false
+        }
+
+        var value: CFTypeRef?
+        let app = AXUIElementCreateApplication(pid)
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success else {
+            // Accessibility is already trusted at this point. If the query still fails,
+            // don't block every keystroke host on a window state we couldn't determine.
+            return true
+        }
+        return !((value as? [AXUIElement])?.isEmpty ?? true)
     }
 
     /// Maximum UTF-16 units per synthesized event. A single event carrying a long
