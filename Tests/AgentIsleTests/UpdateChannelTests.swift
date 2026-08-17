@@ -52,34 +52,60 @@ final class UpdateChannelTests: XCTestCase {
         XCTAssertEqual(r("1.2.0").cleanVersion, "1.2.0")
     }
 
-    // MARK: - Codesign Team ID parsing (updater signature gate)
+    // MARK: - Signature gate
 
-    func testTeamIdentifierParsesCodesignVerboseOutput() {
-        let sample = """
-        Executable=/Applications/Agent Isle.app/Contents/MacOS/AgentIsle
-        Identifier=com.devlab.agent-isle
-        Format=app bundle with Mach-O thin (arm64)
-        CodeDirectory v=20500 size=1234 flags=0x10000(runtime) hashes=30+7 location=embedded
-        Signature size=9000
-        Authority=Developer ID Application: Example Inc (ABCD123456)
-        Authority=Developer ID Certification Authority
-        Authority=Apple Root CA
-        Timestamp=1 Jan 2026 at 12:00:00
-        Info.plist entries=12
-        TeamIdentifier=ABCD123456
-        Sealed Resources version=2 rules=13 files=5
-        Internal requirements count=1 size=180
-        """
-        XCTAssertEqual(Updater.teamIdentifier(fromCodesignOutput: sample), "ABCD123456")
+    func testExpectedTeamIDMatchesReleaseSigner() {
+        XCTAssertEqual(Updater.expectedTeamID, "ZS3A435WC2")
     }
 
-    func testTeamIdentifierReturnsNilWhenNotSetOrMissing() {
-        XCTAssertNil(Updater.teamIdentifier(fromCodesignOutput: "Signature=adhoc\n"))
-        XCTAssertNil(Updater.teamIdentifier(fromCodesignOutput: "TeamIdentifier=not set\n"))
-        XCTAssertNil(Updater.teamIdentifier(fromCodesignOutput: "TeamIdentifier=\n"))
-        XCTAssertEqual(
-            Updater.teamIdentifier(fromCodesignOutput: "Team Identifier=XY99TEAM01\n"),
-            "XY99TEAM01"
-        )
+    func testCodesignRequirementPinsTeamOU() {
+        XCTAssertTrue(Updater.codesignRequirement.contains("leaf[subject.OU]"))
+        XCTAssertTrue(Updater.codesignRequirement.contains(Updater.expectedTeamID))
+        XCTAssertTrue(Updater.codesignRequirement.contains("anchor apple generic"))
+    }
+
+    func testVerifyRejectsUnsignedPath() async {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-isle-unsigned-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        do {
+            try await Updater.verifyUpdateCandidate(dir)
+            XCTFail("unsigned path should fail the signature gate")
+        } catch UpdateError.invalidSignature {
+            // expected
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+    }
+
+    func testVerifyRejectsAdHocBundle() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-isle-adhoc-\(UUID().uuidString)")
+        let app = root.appendingPathComponent("Evil.app")
+        let macOS = app.appendingPathComponent("Contents/MacOS")
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let exe = macOS.appendingPathComponent("Evil")
+        try Data("#!/bin/sh\n".utf8).write(to: exe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exe.path)
+
+        let sign = Process()
+        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        sign.arguments = ["--force", "--sign", "-", app.path]
+        try sign.run()
+        sign.waitUntilExit()
+        XCTAssertEqual(sign.terminationStatus, 0, "ad-hoc codesign should succeed")
+
+        do {
+            try await Updater.verifyUpdateCandidate(app)
+            XCTFail("ad-hoc bundle must not pass the pinned Team ID requirement")
+        } catch UpdateError.invalidSignature {
+            // expected — this is the #42 attack (compromised zip, ad-hoc signed)
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
     }
 }

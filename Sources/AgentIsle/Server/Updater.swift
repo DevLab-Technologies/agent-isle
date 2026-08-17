@@ -47,6 +47,15 @@ final class Updater: ObservableObject {
         URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30")!
     static let releasesPage =
         URL(string: "https://github.com/\(repo)/releases/latest")!
+    /// Developer ID Team ID that signs official GitHub releases
+    /// (`AHMED ELKHAYYAT (ZS3A435WC2)`). Change only if the Apple team changes;
+    /// auto-update must not accept another signer without an explicit commit.
+    nonisolated static let expectedTeamID = "ZS3A435WC2"
+    /// `codesign -R=` requirement: Apple generic anchor + this team's OU.
+    /// `--verify --strict` alone accepts ad-hoc signatures; this does not.
+    nonisolated static var codesignRequirement: String {
+        "anchor apple generic and certificate leaf[subject.OU] = \(expectedTeamID)"
+    }
 
     private let autoInstallKey = "autoInstallUpdates"
     private let skippedKey = "skippedUpdateVersion"
@@ -301,10 +310,10 @@ final class Updater: ObservableObject {
                   let newApp = Self.firstApp(in: unzipDir)
             else { throw UpdateError.unpackFailed }
 
-            // Refuse to swap in an unsigned / differently-team-signed bundle. A compromised
-            // GitHub release must not auto-install without a valid code signature that
-            // matches the Team ID of the currently running app (when we have one).
-            try await Self.verifyUpdateCandidate(newApp, currentlyInstalled: Bundle.main.bundleURL)
+            // Refuse unsigned / differently-team-signed bundles. A compromised GitHub
+            // release must not auto-install: the candidate has to satisfy the pinned
+            // Developer ID Team ID, not merely pass a structural codesign verify.
+            try await Self.verifyUpdateCandidate(newApp)
 
             // Hand the swap+relaunch to a detached helper: it waits for us to quit,
             // replaces the bundle (with rollback on failure), then reopens the app.
@@ -341,72 +350,16 @@ final class Updater: ObservableObject {
 
     // MARK: - Signature gate
 
-    /// Verify `candidate` is codesigned and (when the running app has a Team ID) that the
-    /// Team IDs match. Pure enough to unit-test the Team ID parser separately.
-    nonisolated static func verifyUpdateCandidate(_ candidate: URL, currentlyInstalled: URL) async throws {
-        // --deep --strict: every nested code object must verify; fail on ad-hoc when
-        // hardened runtime / library validation rules require a real identity for release
-        // builds. We always require a clean verify regardless.
-        let status = await run("/usr/bin/codesign",
-                               ["--verify", "--deep", "--strict", candidate.path])
+    /// Verify `candidate` is signed by the official Developer ID team.
+    /// `--verify --strict` is not enough: it accepts ad-hoc signatures. The `-R=`
+    /// requirement is what rejects unsigned, ad-hoc, and other-team bundles.
+    nonisolated static func verifyUpdateCandidate(_ candidate: URL) async throws {
+        let status = await run("/usr/bin/codesign", [
+            "--verify", "--strict",
+            "-R=\(codesignRequirement)",
+            candidate.path,
+        ])
         guard status == 0 else { throw UpdateError.invalidSignature }
-
-        let installedTeam = await teamIdentifier(of: currentlyInstalled)
-        let candidateTeam = await teamIdentifier(of: candidate)
-        // When the running app is Developer ID / App Store signed, require the same team.
-        // Ad-hoc / unsigned local builds have no Team ID — still require the candidate
-        // to have verified above, but do not invent a team match we cannot check.
-        if let installedTeam, !installedTeam.isEmpty {
-            guard candidateTeam == installedTeam else { throw UpdateError.teamIDMismatch }
-        }
-    }
-
-    /// Read the Team Identifier of an app bundle via `codesign -dv`. Returns nil when the
-    /// binary is ad-hoc signed or the tool fails.
-    nonisolated static func teamIdentifier(of app: URL) async -> String? {
-        let output = await runCapturing("/usr/bin/codesign",
-                                        ["-dv", "--verbose=2", app.path])
-        return teamIdentifier(fromCodesignOutput: output)
-    }
-
-    /// Parse TeamIdentifier from `codesign -dv --verbose=2` stderr/stdout text.
-    nonisolated static func teamIdentifier(fromCodesignOutput output: String) -> String? {
-        for line in output.split(whereSeparator: \.isNewline) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // "TeamIdentifier=ABCD123456" (common) or "Team Identifier=…"
-            if trimmed.hasPrefix("TeamIdentifier=") {
-                let value = String(trimmed.dropFirst("TeamIdentifier=".count))
-                return value.isEmpty || value == "not set" ? nil : value
-            }
-            if trimmed.hasPrefix("Team Identifier=") {
-                let value = String(trimmed.dropFirst("Team Identifier=".count))
-                    .trimmingCharacters(in: .whitespaces)
-                return value.isEmpty || value == "not set" ? nil : value
-            }
-        }
-        return nil
-    }
-
-    /// Run a tool and capture combined stdout+stderr (codesign -dv writes to stderr).
-    nonisolated private static func runCapturing(_ path: String, _ args: [String]) async -> String {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global().async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: path)
-                p.arguments = args
-                let pipe = Pipe()
-                p.standardOutput = pipe
-                p.standardError = pipe
-                do {
-                    try p.run()
-                    p.waitUntilExit()
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    cont.resume(returning: String(data: data, encoding: .utf8) ?? "")
-                } catch {
-                    cont.resume(returning: "")
-                }
-            }
-        }
     }
 
     /// Spawn a detached shell helper that waits for this process to exit, swaps the
@@ -414,6 +367,8 @@ final class Updater: ObservableObject {
     ///
     /// Quarantine is only cleared after the candidate already passed
     /// `verifyUpdateCandidate` — never as a substitute for signature checks.
+    /// The helper re-runs the same codesign requirement immediately before `ditto`
+    /// so a same-user swap of the temp bundle after we quit cannot land.
     nonisolated private static func installAndRelaunch(newApp: URL, dest: URL) throws {
         let pid = ProcessInfo.processInfo.processIdentifier
         let script = """
@@ -421,13 +376,19 @@ final class Updater: ObservableObject {
         APP_PID=\(pid)
         SRC=\(shellQuote(newApp.path))
         DEST=\(shellQuote(dest.path))
+        REQ=\(shellQuote(codesignRequirement))
         BACKUP="${DEST}.old-$$"
         while /bin/kill -0 "$APP_PID" 2>/dev/null; do /bin/sleep 0.2; done
+        # Re-check after this process has exited: the Swift-side verify is otherwise
+        # a TOCTOU against anything that can write the temp bundle.
+        if ! /usr/bin/codesign --verify --strict -R="$REQ" "$SRC"; then
+          /usr/bin/open "$DEST"
+          exit 1
+        fi
         # Only swap if we can safely move the current bundle aside first; otherwise
         # leave it untouched (a failed update must never delete the installed app).
         if /bin/mv "$DEST" "$BACKUP"; then
           if /usr/bin/ditto "$SRC" "$DEST"; then
-            # Candidate was codesign-verified before this helper ran.
             /usr/bin/xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
             /bin/rm -rf "$BACKUP"
           else
@@ -484,8 +445,7 @@ final class Updater: ObservableObject {
     }
 }
 
-private enum UpdateError: Error {
+enum UpdateError: Error, Equatable {
     case unpackFailed
     case invalidSignature
-    case teamIDMismatch
 }
