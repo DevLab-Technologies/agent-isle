@@ -548,8 +548,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyDisplayMode() {
         let mode = AppSettings.shared.displayMode
 
-        // Notch/pill window visibility.
+        // Notch/pill window visibility. This runs on every Space switch (FullscreenMonitor
+        // observes `activeSpaceDidChangeNotification`), which is also the cheapest moment to
+        // re-assert all-Spaces membership — see `NotchWindow.applySpaceBehavior()`.
         if notchWindowShouldShow {
+            notchWindow?.applySpaceBehavior()
             notchWindow?.orderFrontRegardless()
         } else {
             notchWindow?.orderOut(nil)

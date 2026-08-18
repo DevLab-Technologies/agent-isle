@@ -40,7 +40,7 @@ final class NotchWindow: NSPanel {
 
         isFloatingPanel = true
         level = .statusBar
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        applySpaceBehavior()
         isMovable = false
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
@@ -142,6 +142,24 @@ final class NotchWindow: NSPanel {
         MainActor.assumeIsolated { store.setHovering(inside) }
     }
 
+    /// (Re)declare that the island lives on every Space.
+    ///
+    /// Setting this once in `init` is not enough in practice: a long-lived process that
+    /// sees a display reconfiguration (lid open/close, external monitor plugged in) or
+    /// Spaces added after launch can end up with the panel re-registered by the Window
+    /// Server as an ordinary window bound to a single Space, at which point the island
+    /// disappears from every other desktop until the app is relaunched. Re-asserting the
+    /// behavior on those events is cheap and idempotent, so we do it on each of them.
+    ///
+    /// Note this deliberately leaves `level` alone — the demo/marketing launch path raises
+    /// it above other notch apps and must not be clobbered here.
+    func applySpaceBehavior() {
+        // Assigned unconditionally rather than diffed against the current value: the
+        // symptom is the Window Server having dropped the flag while `NSWindow` still
+        // reports it, so an equality check would skip exactly the case this repairs.
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+    }
+
     private func positionWindow() {
         geometry = NotchGeometry.current()
         let screen = geometry.screenFrame
@@ -174,12 +192,14 @@ final class NotchWindow: NSPanel {
     }
 
     func reposition() {
+        applySpaceBehavior()
         positionWindow()
         updateHitRegion(store.islandSize)
     }
 
     /// Recompute notch geometry (after the user tunes it) and rebuild the island.
     func refreshGeometry() {
+        applySpaceBehavior()
         geometry = NotchGeometry.current()
         hosting?.rootView = makeRoot()
         positionWindow()
