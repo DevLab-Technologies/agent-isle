@@ -57,16 +57,19 @@ def _project_root(cwd):
     Searching nearest-first means a real project wins over a stray marker further up, and
     accepting `.claude` (not just `.git`) finds the root of a project that isn't a repo.
     Falls back to `cwd` when nothing matches."""
-    home = os.path.abspath(os.path.expanduser("~"))
+    home = os.path.realpath(os.path.expanduser("~"))
     d = cwd
-    while d != home:
+    while True:
+        parent = os.path.dirname(d)
+        # Stop before $HOME (compared through realpath, so a symlinked home still bounds
+        # the walk), the filesystem root, and top-level dirs such as /Users or /Volumes:
+        # none of those is ever a project, and accepting one would pull in `.claude` dirs
+        # belonging to unrelated trees.
+        if os.path.realpath(d) == home or parent == d or os.path.dirname(parent) == parent:
+            return cwd
         if any(os.path.exists(os.path.join(d, m)) for m in PROJECT_MARKERS):
             return d
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
         d = parent
-    return cwd
 
 
 def _settings_files(cwd):
@@ -135,18 +138,42 @@ def _norm_cmd(s):
 
 
 def _bash_matches(spec, command):
-    """Claude Code's Bash rules are exact ("git status") or a prefix ("git status:*")."""
-    # Guard the raw command: _norm_cmd collapses newlines, so a multiline command would
-    # otherwise read as a single line and satisfy a prefix rule.
-    if SHELL_CHAINING.search((command or "").strip()):
+    """Claude Code's Bash rules are exact ("git status"), a prefix ("git status:*", and the
+    equivalent bare-`*` form "git pull *"), or a glob with an interior `*`.
+
+    Shell operators are judged per part rather than over the whole command: whatever the
+    rule itself spells out was approved by the user, so a rule that chains matches its own
+    chain. Only the tail a prefix rule leaves unspecified has to be operator-free, since
+    that tail is what could otherwise smuggle an extra command past a short prefix.
+    Newlines are checked on the raw command, because _norm_cmd collapses them and a
+    multiline command would otherwise read as a single line."""
+    raw = (command or "").strip()
+    if "\n" in raw and "\n" not in spec:
         return False
     cmd = _norm_cmd(command)
     if not cmd:
         return False
+    spec_norm = _norm_cmd(spec)
+    prefix = None
     if spec.endswith(":*"):
         prefix = _norm_cmd(spec[:-2])
-        return bool(prefix) and (cmd == prefix or cmd.startswith(prefix + " "))
-    return cmd == _norm_cmd(spec)
+    elif spec_norm.endswith(" *"):
+        prefix = spec_norm[:-2].rstrip()  # "git pull *" is the same shape as "git pull:*"
+    if prefix is not None:
+        if not prefix:
+            return False
+        if cmd == prefix:
+            return True
+        if not cmd.startswith(prefix + " "):
+            return False
+        return not SHELL_CHAINING.search(cmd[len(prefix):])
+    if "*" in spec_norm:
+        pattern = ".*".join(re.escape(part) for part in spec_norm.split("*"))
+        if not re.match("^" + pattern + "$", cmd):
+            return False
+        # A wildcard can span operators only if the rule itself contains them.
+        return bool(SHELL_CHAINING.search(spec_norm)) or not SHELL_CHAINING.search(cmd)
+    return cmd == spec_norm
 
 
 def _resolve_pattern(spec, base):
