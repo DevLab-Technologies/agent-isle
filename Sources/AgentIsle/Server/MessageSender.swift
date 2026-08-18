@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 
 /// Delivers a typed message into a running agent session's terminal.
 ///
@@ -11,10 +10,11 @@ import ApplicationServices
 @MainActor
 enum MessageSender {
     enum SendError: Error {
-        /// Not trusted for Accessibility. `stale` means we already asked macOS to prompt and
-        /// the grant still isn't in effect — almost always a grant left over from another copy
-        /// of the app (moved, updated, or re-signed), which the switch still shows as enabled.
-        case accessibilityDenied(stale: Bool)
+        /// Not trusted for Accessibility. `askedBefore` means macOS was already asked to
+        /// prompt on an earlier attempt, so we won't ask again — the user either hasn't
+        /// finished granting it, or the grant belongs to another copy of the app (moved,
+        /// updated, or re-signed) while the switch still reads as enabled.
+        case accessibilityDenied(askedBefore: Bool)
         case automationDenied(String)
         case couldNotFocus(String)
         case scriptFailed(String)
@@ -22,27 +22,19 @@ enum MessageSender {
         /// A short, user-facing explanation shown under the input bar.
         var userMessage: String {
             switch self {
-            case .accessibilityDenied(let stale):
-                return stale
-                    ? "Accessibility still isn't active for this copy of Agent Isle. Open Accessibility settings, remove Agent Isle, add this copy back, and relaunch."
-                    : "Agent Isle needs Accessibility permission to type into your session. Grant it in the window macOS just opened, then send again."
+            case .accessibilityDenied(let askedBefore):
+                // Neither message claims more than we know: macOS shows no prompt at all when
+                // the app is already listed under Accessibility, and a still-untrusted second
+                // attempt may just mean the user hasn't finished granting it yet.
+                return askedBefore
+                    ? "Still no Accessibility permission for Agent Isle. Turn it on in Accessibility settings — if it already looks enabled, this isn't the copy that was granted, so remove Agent Isle there, add this one back, and relaunch."
+                    : "Agent Isle needs Accessibility permission to type into your session. Turn it on in Accessibility settings, then send again."
             case .automationDenied(let app):
                 return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
             case .couldNotFocus(let app):
                 return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
             case .scriptFailed(let detail):
                 return "Couldn't send: \(detail)"
-            }
-        }
-
-        /// One-line form for the session card, which is where a failure from a question or
-        /// plan card is visible (the longer `userMessage` only shows under the chat input).
-        var shortMessage: String {
-            switch self {
-            case .accessibilityDenied:  return "Couldn't send — Accessibility not granted"
-            case .automationDenied:     return "Couldn't send — Automation not allowed"
-            case .couldNotFocus(let app): return "Couldn't send — \(app) wouldn't come forward"
-            case .scriptFailed:         return "Couldn't send to the session"
             }
         }
     }
@@ -144,10 +136,10 @@ enum MessageSender {
         case .trusted:
             break
         case .prompted:
-            completion(.failure(.accessibilityDenied(stale: false)))
+            completion(.failure(.accessibilityDenied(askedBefore: false)))
             return
         case .alreadyAsked:
-            completion(.failure(.accessibilityDenied(stale: true)))
+            completion(.failure(.accessibilityDenied(askedBefore: true)))
             return
         }
         // Bring the session's app forward, then type only once it is actually frontmost.

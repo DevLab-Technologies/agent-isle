@@ -5,6 +5,10 @@ import XCTest
 /// macOS reopens it on *every* prompting trust check while untrusted. These lock in the rule
 /// that keeps that from turning into a nag: ask once, then never again on repeat attempts, and
 /// only forget the ask once real trust is observed.
+///
+/// `decide` picks the outcome and `record` applies it to the remembered flag; together they
+/// are everything `check()` does apart from the two system calls, so the bookkeeping is
+/// covered here without prompting the machine running the tests.
 @MainActor
 final class AccessibilityPermissionTests: XCTestCase {
 
@@ -27,11 +31,53 @@ final class AccessibilityPermissionTests: XCTestCase {
                        .alreadyAsked)
     }
 
-    func testErrorMessageDistinguishesStaleGrant() {
-        let first = MessageSender.SendError.accessibilityDenied(stale: false).userMessage
-        let stale = MessageSender.SendError.accessibilityDenied(stale: true).userMessage
-        XCTAssertNotEqual(first, stale)
-        // The stale case is the one that needs the remove-and-re-add instruction.
-        XCTAssertTrue(stale.localizedCaseInsensitiveContains("remove"))
+    /// The first untrusted attempt prompts *and* records the ask — without the record, every
+    /// later send would prompt again and the nag would be back.
+    func testFirstAttemptRecordsTheAsk() {
+        var asked = false
+        let prompt = AccessibilityPermission.record(.prompted, alreadyAsked: &asked)
+        XCTAssertTrue(prompt)
+        XCTAssertTrue(asked)
+    }
+
+    func testLaterAttemptsNeitherPromptNorForgetTheAsk() {
+        var asked = true
+        let prompt = AccessibilityPermission.record(.alreadyAsked, alreadyAsked: &asked)
+        XCTAssertFalse(prompt)
+        XCTAssertTrue(asked)
+    }
+
+    /// Observing real trust clears the ask, so a later genuine loss of the grant (app update,
+    /// re-signing) still gets its one prompt.
+    func testTrustForgetsTheAsk() {
+        var asked = true
+        let prompt = AccessibilityPermission.record(.trusted, alreadyAsked: &asked)
+        XCTAssertFalse(prompt)
+        XCTAssertFalse(asked)
+    }
+
+    /// Two untrusted attempts in a row prompt exactly once.
+    func testAskOnceAcrossRepeatedAttempts() {
+        var asked = false
+        var prompts = 0
+        for _ in 0..<5 {
+            let outcome = AccessibilityPermission.decide(isTrusted: false, alreadyAsked: asked)
+            if AccessibilityPermission.record(outcome, alreadyAsked: &asked) { prompts += 1 }
+        }
+        XCTAssertEqual(prompts, 1)
+    }
+
+    /// Neither message may over-claim: the first must not promise a prompt window (macOS shows
+    /// none when the app is already listed), and the second must not assert a stale grant as
+    /// fact — the user may simply not have finished granting it.
+    func testErrorMessagesDoNotOverClaim() {
+        let first = MessageSender.SendError.accessibilityDenied(askedBefore: false).userMessage
+        let again = MessageSender.SendError.accessibilityDenied(askedBefore: true).userMessage
+        XCTAssertNotEqual(first, again)
+        XCTAssertFalse(first.localizedCaseInsensitiveContains("just opened"))
+        XCTAssertFalse(again.localizedCaseInsensitiveContains("still isn't active"))
+        // The remove-and-re-add path is offered conditionally, not as a diagnosis.
+        XCTAssertTrue(again.localizedCaseInsensitiveContains("if it already looks enabled"))
+        XCTAssertTrue(again.localizedCaseInsensitiveContains("remove"))
     }
 }

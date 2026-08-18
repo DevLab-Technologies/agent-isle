@@ -24,11 +24,11 @@ enum AccessibilityPermission {
     enum Outcome {
         /// Trusted — synthetic events may be posted.
         case trusted
-        /// Untrusted, and macOS was just asked to show its prompt (System Settings opened).
+        /// Untrusted, and macOS was asked to show its prompt (it stays silent if the app is
+        /// already listed under Accessibility, so the caller must not promise a window).
         case prompted
         /// Untrusted, and we already asked in an earlier attempt — prompting again would only
-        /// reopen System Settings. Practically always a grant that belongs to a different copy
-        /// of the app, so the caller should explain how to re-add this one instead.
+        /// reopen System Settings, so the caller explains the options instead.
         case alreadyAsked
     }
 
@@ -39,25 +39,46 @@ enum AccessibilityPermission {
         return alreadyAsked ? .alreadyAsked : .prompted
     }
 
-    /// Check trust, showing the system prompt at most once. Never reopens System Settings on
-    /// repeat attempts.
-    static func check() -> Outcome {
-        let outcome = decide(isTrusted: isTrusted,
-                             alreadyAsked: AppSettings.shared.accessibilityPromptShown)
+    /// Fold an outcome into the "already asked" flag, returning whether the caller must now
+    /// show the macOS prompt. Split out from `check()` so the ask-once-and-reset bookkeeping
+    /// is testable without touching TCC or opening System Settings.
+    static func record(_ outcome: Outcome, alreadyAsked: inout Bool) -> Bool {
         switch outcome {
         case .trusted:
             // Trust observed: forget the ask so a future genuine loss of the grant can prompt.
-            if AppSettings.shared.accessibilityPromptShown {
-                AppSettings.shared.accessibilityPromptShown = false
-            }
+            alreadyAsked = false
+            return false
         case .prompted:
-            AppSettings.shared.accessibilityPromptShown = true
+            alreadyAsked = true
+            return true
+        case .alreadyAsked:
+            return false
+        }
+    }
+
+    /// Check trust, showing the system prompt at most once. Never reopens System Settings on
+    /// repeat attempts.
+    static func check() -> Outcome {
+        var asked = AppSettings.shared.accessibilityPromptShown
+        let outcome = decide(isTrusted: isTrusted, alreadyAsked: asked)
+        let shouldPrompt = record(outcome, alreadyAsked: &asked)
+        if asked != AppSettings.shared.accessibilityPromptShown {
+            AppSettings.shared.accessibilityPromptShown = asked
+        }
+        if shouldPrompt {
             let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
             _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-        case .alreadyAsked:
-            break
         }
         return outcome
+    }
+
+    /// Drop a recorded ask whenever the app is actually trusted. Called at launch as well as
+    /// from `check()`: a user whose sessions all take the AppleScript path never reaches
+    /// `check()`, and would otherwise carry the flag forever — so if the grant were later
+    /// invalidated they'd get no prompt at all on their next keystroke send.
+    static func forgetAskIfTrusted() {
+        guard AppSettings.shared.accessibilityPromptShown, isTrusted else { return }
+        AppSettings.shared.accessibilityPromptShown = false
     }
 
     /// Open the Accessibility pane — only ever from an explicit user action.

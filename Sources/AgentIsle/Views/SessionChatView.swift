@@ -118,24 +118,10 @@ struct SessionChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 4) {
-            if let err = store.sendError {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(err)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(Palette.deny)
-                    // Agent Isle never opens System Settings by itself (that nagging is what
-                    // this replaces) — the trip there is one deliberate tap.
-                    if store.sendErrorNeedsAccessibility {
-                        Button("Open Accessibility settings") {
-                            AccessibilityPermission.openSettings()
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.8))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
+            if let err = store.sendError, store.sendErrorSessionID == session.id {
+                SendErrorNotice(message: err,
+                                showsAccessibilityButton: store.sendErrorNeedsAccessibility)
+                    .padding(.horizontal, 12)
             }
             HStack(spacing: 8) {
                 TextField("Message \(session.agent.displayName)…", text: $draft)
