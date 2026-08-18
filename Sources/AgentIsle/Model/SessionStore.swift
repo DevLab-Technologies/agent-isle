@@ -46,6 +46,10 @@ final class SessionStore: ObservableObject {
     @Published var chatLoading: Bool = false
     /// Transient error surfaced after a failed send (e.g. missing permission).
     @Published var sendError: String?
+    /// True when `sendError` is a missing-Accessibility problem, so the chat view can offer a
+    /// button into the Accessibility settings. We never open System Settings on our own — see
+    /// `AccessibilityPermission` — so this is the user's way there.
+    @Published var sendErrorNeedsAccessibility = false
 
     /// While a chat is open the panel stays pinned (won't auto-collapse on hover-out).
     var isPinned: Bool { openedSessionID != nil }
@@ -257,7 +261,7 @@ final class SessionStore: ObservableObject {
         // here would stick it open and defeat hover-driven auto-collapse after closing.
         openedMessages = []
         chatLoading = false
-        sendError = nil
+        clearSendError()
         tailedURL = nil
         ensureTailing(session)   // flips chatLoading back on if there's a transcript to read
     }
@@ -267,7 +271,7 @@ final class SessionStore: ObservableObject {
         openedSessionID = nil
         openedMessages = []
         chatLoading = false
-        sendError = nil
+        clearSendError()
         tailedURL = nil
     }
 
@@ -294,6 +298,27 @@ final class SessionStore: ObservableObject {
         tailer.start(url: url, agent: session.agent)
     }
 
+    /// Surface a failed send once, in one place: the message plus whether the chat view
+    /// should offer the Accessibility settings shortcut.
+    private func report(_ error: MessageSender.SendError, sessionID: UUID) {
+        sendError = error.userMessage
+        if case .accessibilityDenied = error {
+            sendErrorNeedsAccessibility = true
+        } else {
+            sendErrorNeedsAccessibility = false
+        }
+        // The chat view is only one of the places a send starts from; a question or plan card
+        // in the list has no error line of its own, so correct the session's last message too
+        // instead of leaving the optimistic "Sent to …" standing.
+        update(id: sessionID) { $0.lastMessage = error.shortMessage }
+        SoundPlayer.shared.play(.deny)
+    }
+
+    private func clearSendError() {
+        sendError = nil
+        sendErrorNeedsAccessibility = false
+    }
+
     /// Deliver a typed message into the session's host.
     ///
     /// Editor extensions (VS Code / Cursor / Windsurf) render their own input and can't be
@@ -303,7 +328,7 @@ final class SessionStore: ObservableObject {
     func sendMessage(_ text: String, to session: AgentSession) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        sendError = nil
+        clearSendError()
 
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
         if let url = Jumper.editorAnswerURL(for: session, prompt: oneLine) {
@@ -317,8 +342,7 @@ final class SessionStore: ObservableObject {
             case .success:
                 SoundPlayer.shared.play(.select)
             case .failure(let error):
-                self?.sendError = error.userMessage
-                SoundPlayer.shared.play(.deny)
+                self?.report(error, sessionID: session.id)
             }
         }
     }
@@ -409,13 +433,12 @@ final class SessionStore: ObservableObject {
         }
         SoundPlayer.shared.play(.select)
         if viaTranscript, let session {
-            sendError = nil
+            clearSendError()
             // Deliver the flattened one-line form (MessageSender flattens too, but keep
             // what we typed identical to what we recorded as the session's last message).
             MessageSender.send(oneLine, to: session) { [weak self] result in
                 if case .failure(let error) = result {
-                    self?.sendError = error.userMessage
-                    SoundPlayer.shared.play(.deny)
+                    self?.report(error, sessionID: session.id)
                 }
             }
         } else {
@@ -460,12 +483,11 @@ final class SessionStore: ObservableObject {
         SoundPlayer.shared.play(hasFeedback ? .select : .approve)
 
         if viaTranscript, let session {
-            sendError = nil
+            clearSendError()
             let text = hasFeedback ? oneLine : "Approved — proceed with the plan."
             MessageSender.send(text, to: session) { [weak self] result in
                 if case .failure(let error) = result {
-                    self?.sendError = error.userMessage
-                    SoundPlayer.shared.play(.deny)
+                    self?.report(error, sessionID: session.id)
                 }
             }
         } else {

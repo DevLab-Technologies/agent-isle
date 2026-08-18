@@ -11,7 +11,10 @@ import ApplicationServices
 @MainActor
 enum MessageSender {
     enum SendError: Error {
-        case accessibilityDenied
+        /// Not trusted for Accessibility. `stale` means we already asked macOS to prompt and
+        /// the grant still isn't in effect — almost always a grant left over from another copy
+        /// of the app (moved, updated, or re-signed), which the switch still shows as enabled.
+        case accessibilityDenied(stale: Bool)
         case automationDenied(String)
         case couldNotFocus(String)
         case scriptFailed(String)
@@ -19,14 +22,27 @@ enum MessageSender {
         /// A short, user-facing explanation shown under the input bar.
         var userMessage: String {
             switch self {
-            case .accessibilityDenied:
-                return "Grant Accessibility to Agent Isle in System Settings › Privacy. If it already looks enabled, remove it there, re-add this copy, and relaunch."
+            case .accessibilityDenied(let stale):
+                return stale
+                    ? "Accessibility still isn't active for this copy of Agent Isle. Open Accessibility settings, remove Agent Isle, add this copy back, and relaunch."
+                    : "Agent Isle needs Accessibility permission to type into your session. Grant it in the window macOS just opened, then send again."
             case .automationDenied(let app):
                 return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
             case .couldNotFocus(let app):
                 return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
             case .scriptFailed(let detail):
                 return "Couldn't send: \(detail)"
+            }
+        }
+
+        /// One-line form for the session card, which is where a failure from a question or
+        /// plan card is visible (the longer `userMessage` only shows under the chat input).
+        var shortMessage: String {
+            switch self {
+            case .accessibilityDenied:  return "Couldn't send — Accessibility not granted"
+            case .automationDenied:     return "Couldn't send — Automation not allowed"
+            case .couldNotFocus(let app): return "Couldn't send — \(app) wouldn't come forward"
+            case .scriptFailed:         return "Couldn't send to the session"
             }
         }
     }
@@ -124,8 +140,14 @@ enum MessageSender {
 
     private static func sendViaKeystrokes(_ text: String, to session: AgentSession,
                                           completion: @escaping (Result<Void, SendError>) -> Void) {
-        guard ensureAccessibility() else {
-            completion(.failure(.accessibilityDenied))
+        switch AccessibilityPermission.check() {
+        case .trusted:
+            break
+        case .prompted:
+            completion(.failure(.accessibilityDenied(stale: false)))
+            return
+        case .alreadyAsked:
+            completion(.failure(.accessibilityDenied(stale: true)))
             return
         }
         // Bring the session's app forward, then type only once it is actually frontmost.
@@ -168,15 +190,6 @@ enum MessageSender {
             }
         }
         poll()
-    }
-
-    /// Returns true if we may post synthetic events; otherwise triggers the one-time
-    /// system prompt so the user can grant access.
-    private static func ensureAccessibility() -> Bool {
-        if AXIsProcessTrusted() { return true }
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-        return false
     }
 
     /// Maximum UTF-16 units per synthesized event. A single event carrying a long
