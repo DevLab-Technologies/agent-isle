@@ -45,25 +45,46 @@ MANAGED_SETTINGS = "/Library/Application Support/ClaudeCode/managed-settings.jso
 SHELL_CHAINING = re.compile(r"&&|\|\||;|\||`|\$\(|>|<|\n")
 
 
+def _project_root(cwd):
+    """The outermost directory Claude Code treats as the project: the nearest ancestor
+    holding a `.git`, never crossing above $HOME. Falls back to `cwd` when there is no
+    repo, so a stray `.claude/` in an unrelated ancestor can't contribute rules."""
+    home = os.path.abspath(os.path.expanduser("~"))
+    d = cwd
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d or d == home:
+            return cwd
+        d = parent
+
+
 def _settings_files(cwd):
     """Every settings file Claude Code merges for a call in `cwd`, each paired with the
-    directory its relative path rules resolve against. Ordered outermost-first; buckets
+    directory its relative path rules resolve against: managed policy, user settings, and
+    the project chain from its root down to `cwd` (Claude Code honors nested `.claude/`
+    dirs inside a project, but nothing above its root). Ordered outermost-first; buckets
     are unioned rather than overridden, so the order only affects which rule is reported
     first for an equally-matching pair."""
     out = [(MANAGED_SETTINGS, "/")]
     user_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-    out.append((os.path.join(user_dir, "settings.json"), os.path.expanduser("~")))
-    chain = []
+    user_settings = os.path.join(user_dir, "settings.json")
+    out.append((user_settings, os.path.expanduser("~")))
     d = os.path.abspath(cwd) if cwd else os.getcwd()
+    root = _project_root(d)
+    chain = []
     while True:
         chain.append(d)
         parent = os.path.dirname(d)
-        if parent == d:
+        if d == root or parent == d:
             break
         d = parent
     for d in reversed(chain):
         for name in ("settings.json", "settings.local.json"):
-            out.append((os.path.join(d, ".claude", name), d))
+            path = os.path.join(d, ".claude", name)
+            if path != user_settings:  # already added above, with its own base dir
+                out.append((path, d))
     return out
 
 
@@ -106,8 +127,12 @@ def _norm_cmd(s):
 
 def _bash_matches(spec, command):
     """Claude Code's Bash rules are exact ("git status") or a prefix ("git status:*")."""
+    # Guard the raw command: _norm_cmd collapses newlines, so a multiline command would
+    # otherwise read as a single line and satisfy a prefix rule.
+    if SHELL_CHAINING.search(command or ""):
+        return False
     cmd = _norm_cmd(command)
-    if not cmd or SHELL_CHAINING.search(cmd):
+    if not cmd:
         return False
     if spec.endswith(":*"):
         prefix = _norm_cmd(spec[:-2])
@@ -119,10 +144,13 @@ def _resolve_pattern(spec, base):
     """`//abs/path` is filesystem-absolute, `~/x` home-relative, anything else relative to
     the directory of the settings file that declared the rule."""
     if spec.startswith("//"):
-        return spec[1:]
-    if spec == "~" or spec.startswith("~/"):
-        return os.path.expanduser(spec)
-    return os.path.join(base, spec)
+        pattern = spec[1:]
+    elif spec == "~" or spec.startswith("~/"):
+        pattern = os.path.expanduser(spec)
+    else:
+        pattern = os.path.join(base, spec)
+    # Normalized to match the target, which _path_matches runs through abspath.
+    return os.path.normpath(pattern)
 
 
 def _glob_to_regex(pattern):
@@ -144,12 +172,13 @@ def _glob_to_regex(pattern):
     return re.compile("^" + "".join(out) + "$")
 
 
-def _path_matches(spec, target, base):
+def _path_matches(spec, target, base, cwd):
     """A rule path matches the tool's target, or anything under it when the rule names a
-    bare directory (gitignore semantics)."""
+    bare directory (gitignore semantics). `base` resolves the rule's own pattern; a
+    relative target belongs to the session, so it resolves against `cwd`."""
     if not target:
         return False
-    target = os.path.abspath(os.path.join(base, os.path.expanduser(target)))
+    target = os.path.abspath(os.path.join(cwd or os.getcwd(), os.path.expanduser(target)))
     pattern = _resolve_pattern(spec, base)
     if "*" in pattern or "?" in pattern:
         return bool(_glob_to_regex(pattern).match(target))
@@ -169,7 +198,7 @@ def _domain_matches(spec, url):
     return host == want or host.endswith("." + want)
 
 
-def _rule_matches(rule, base, tool, tool_input):
+def _rule_matches(rule, base, tool, tool_input, cwd):
     name, spec = _split_rule(rule)
     if name.startswith("mcp__"):
         # `mcp__server` covers a whole server; `mcp__server__tool` one of its tools.
@@ -184,7 +213,7 @@ def _rule_matches(rule, base, tool, tool_input):
         return _domain_matches(spec, tool_input.get("url"))
     key = PATH_TOOLS.get(tool)
     if key:
-        return _path_matches(spec, tool_input.get(key), base)
+        return _path_matches(spec, tool_input.get(key), base, cwd)
     return False  # specifier shape we don't understand — fall through and ask
 
 
@@ -200,7 +229,7 @@ def rule_verdict(tool, tool_input, cwd):
     for bucket in ("deny", "ask", "allow"):
         for rule, base in rules[bucket]:
             try:
-                if _rule_matches(rule, base, tool, tool_input):
+                if _rule_matches(rule, base, tool, tool_input, cwd):
                     return bucket
             except Exception:
                 continue
@@ -483,8 +512,11 @@ def main():
                 }))
             else:
                 # Non-blocking: just report activity, let Claude Code proceed normally.
+                # A deny-matched call never runs — Claude Code blocks it — so don't
+                # report it as running.
+                blocked = rule_verdict(tool, tin, cwd) == "deny"
                 post(dict(base, type="status", status="working",
-                          message=f"Running {tool}"))
+                          message=f"Blocked {tool}" if blocked else f"Running {tool}"))
             sys.exit(0)
 
         elif kind == "posttooluse":
