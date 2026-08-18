@@ -45,19 +45,28 @@ MANAGED_SETTINGS = "/Library/Application Support/ClaudeCode/managed-settings.jso
 SHELL_CHAINING = re.compile(r"&&|\|\||;|\||`|\$\(|>|<|\n")
 
 
+# Files/dirs that mark a directory as a project root, for locating the settings chain.
+PROJECT_MARKERS = (".git", ".claude", "package.json", "Package.swift",
+                   "pyproject.toml", "Cargo.toml", "go.mod")
+
+
 def _project_root(cwd):
-    """The outermost directory Claude Code treats as the project: the nearest ancestor
-    holding a `.git`, never crossing above $HOME. Falls back to `cwd` when there is no
-    repo, so a stray `.claude/` in an unrelated ancestor can't contribute rules."""
+    """The nearest ancestor that looks like a project root. The $HOME boundary is applied
+    *before* the marker test, so neither $HOME nor anything above it can ever become the
+    project — a dotfiles repo at $HOME must not turn sibling trees into project settings.
+    Searching nearest-first means a real project wins over a stray marker further up, and
+    accepting `.claude` (not just `.git`) finds the root of a project that isn't a repo.
+    Falls back to `cwd` when nothing matches."""
     home = os.path.abspath(os.path.expanduser("~"))
     d = cwd
-    while True:
-        if os.path.exists(os.path.join(d, ".git")):
+    while d != home:
+        if any(os.path.exists(os.path.join(d, m)) for m in PROJECT_MARKERS):
             return d
         parent = os.path.dirname(d)
-        if parent == d or d == home:
-            return cwd
+        if parent == d:
+            break
         d = parent
+    return cwd
 
 
 def _settings_files(cwd):
@@ -129,7 +138,7 @@ def _bash_matches(spec, command):
     """Claude Code's Bash rules are exact ("git status") or a prefix ("git status:*")."""
     # Guard the raw command: _norm_cmd collapses newlines, so a multiline command would
     # otherwise read as a single line and satisfy a prefix rule.
-    if SHELL_CHAINING.search(command or ""):
+    if SHELL_CHAINING.search((command or "").strip()):
         return False
     cmd = _norm_cmd(command)
     if not cmd:
@@ -513,8 +522,11 @@ def main():
             else:
                 # Non-blocking: just report activity, let Claude Code proceed normally.
                 # A deny-matched call never runs — Claude Code blocks it — so don't
-                # report it as running.
-                blocked = rule_verdict(tool, tin, cwd) == "deny"
+                # report it as running. Modes that skip permission evaluation run the
+                # call regardless, so don't claim it was blocked there (and don't pay for
+                # a rule scan should_ask deliberately skipped).
+                blocked = (mode not in ("bypassPermissions", "plan")
+                           and rule_verdict(tool, tin, cwd) == "deny")
                 post(dict(base, type="status", status="working",
                           message=f"Blocked {tool}" if blocked else f"Running {tool}"))
             sys.exit(0)
