@@ -45,20 +45,25 @@ MANAGED_SETTINGS = "/Library/Application Support/ClaudeCode/managed-settings.jso
 SHELL_CHAINING = re.compile(r"&&|\|\||;|\||`|\$\(|>|<|\n")
 
 
-# Files/dirs that mark a directory as a project root, for locating the settings chain.
-PROJECT_MARKERS = (".git", ".claude", "package.json", "Package.swift",
+# `.git` is authoritative: the *outermost* repo within range is the project, so a
+# monorepo's package subdirectory never shadows the repository root's own settings.
+VCS_MARKERS = (".git",)
+# Weaker markers locate the root of a project that isn't a repo. They are consulted only
+# when no repo is found, because a language manifest also sits in every monorepo package.
+PROJECT_MARKERS = (".claude", "package.json", "Package.swift",
                    "pyproject.toml", "Cargo.toml", "go.mod")
 
 
 def _project_root(cwd):
-    """The nearest ancestor that looks like a project root. The $HOME boundary is applied
+    """The directory Claude Code treats as the project. The $HOME boundary is applied
     *before* the marker test, so neither $HOME nor anything above it can ever become the
     project — a dotfiles repo at $HOME must not turn sibling trees into project settings.
-    Searching nearest-first means a real project wins over a stray marker further up, and
-    accepting `.claude` (not just `.git`) finds the root of a project that isn't a repo.
-    Falls back to `cwd` when nothing matches."""
+    Within that bounded range the outermost repo wins, so a monorepo package doesn't
+    shadow the repository root's settings; a weak marker is used only when there is no
+    repo at all. Falls back to `cwd` when nothing matches."""
     home = os.path.realpath(os.path.expanduser("~"))
     d = cwd
+    vcs = weak = None
     while True:
         parent = os.path.dirname(d)
         # Stop before $HOME (compared through realpath, so a symlinked home still bounds
@@ -66,10 +71,13 @@ def _project_root(cwd):
         # none of those is ever a project, and accepting one would pull in `.claude` dirs
         # belonging to unrelated trees.
         if os.path.realpath(d) == home or parent == d or os.path.dirname(parent) == parent:
-            return cwd
-        if any(os.path.exists(os.path.join(d, m)) for m in PROJECT_MARKERS):
-            return d
+            break
+        if any(os.path.exists(os.path.join(d, m)) for m in VCS_MARKERS):
+            vcs = d  # keep walking: a further-out repo supersedes this one
+        elif any(os.path.exists(os.path.join(d, m)) for m in PROJECT_MARKERS):
+            weak = d
         d = parent
+    return vcs or weak or cwd
 
 
 def _settings_files(cwd):
@@ -168,11 +176,14 @@ def _bash_matches(spec, command):
             return False
         return not SHELL_CHAINING.search(cmd[len(prefix):])
     if "*" in spec_norm:
-        pattern = ".*".join(re.escape(part) for part in spec_norm.split("*"))
-        if not re.match("^" + pattern + "$", cmd):
+        pattern = "(.*)".join(re.escape(part) for part in spec_norm.split("*"))
+        match = re.match("^" + pattern + "$", cmd)
+        if not match:
             return False
-        # A wildcard can span operators only if the rule itself contains them.
-        return bool(SHELL_CHAINING.search(spec_norm)) or not SHELL_CHAINING.search(cmd)
+        # Only the text a wildcard consumed is unvetted — the literal parts came from the
+        # rule itself. An operator inside an expansion could smuggle in a whole extra
+        # command, so each expansion is checked rather than the spec as a whole.
+        return not any(SHELL_CHAINING.search(part) for part in match.groups())
     return cmd == spec_norm
 
 
