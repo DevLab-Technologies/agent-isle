@@ -159,6 +159,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Task { @MainActor [weak self] in self?.notchWindow?.reposition() }
             }
 
+        // Re-assert all-Spaces membership on every Space switch. Observed directly here
+        // rather than piggybacked on `FullscreenMonitor` (which watches the same
+        // notification for an unrelated reason): the island must keep joining every Space
+        // regardless of whether fullscreen detection is running at all.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.notchWindow?.applySpaceBehavior() }
+            }
+
         // Set up CLI approvals on launch (zero-config first run, gentle nudge after that;
         // skipped entirely if the user opted out).
         if ProcessInfo.processInfo.environment["AGENT_ISLE_DEMO"] != "1" {
@@ -548,9 +558,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyDisplayMode() {
         let mode = AppSettings.shared.displayMode
 
-        // Notch/pill window visibility. This runs on every Space switch (FullscreenMonitor
-        // observes `activeSpaceDidChangeNotification`), which is also the cheapest moment to
-        // re-assert all-Spaces membership — see `NotchWindow.applySpaceBehavior()`.
+        // Notch/pill window visibility. The re-assert here covers the hidden → shown
+        // transition; Space switches are handled by their own observer in
+        // `applicationDidFinishLaunching`. See `NotchWindow.applySpaceBehavior()`.
         if notchWindowShouldShow {
             notchWindow?.applySpaceBehavior()
             notchWindow?.orderFrontRegardless()
