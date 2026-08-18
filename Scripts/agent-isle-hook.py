@@ -18,6 +18,7 @@ Usage:  agent-isle-hook.py <event-kind> [--agent <name>]
 """
 import json
 import os
+import re
 import sys
 import urllib.request
 
@@ -31,14 +32,272 @@ READONLY_TOOLS = {
 }
 # Tools that are auto-approved specifically in acceptEdits mode.
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "Update"}
+# Tools whose rule specifier is a gitignore-style path, and the input key holding it.
+PATH_TOOLS = {
+    "Read": "file_path", "Edit": "file_path", "Write": "file_path",
+    "MultiEdit": "file_path", "NotebookEdit": "notebook_path",
+    "Glob": "path", "Grep": "path", "LS": "path",
+}
+# Enterprise policy file (macOS); merged like any other settings file.
+MANAGED_SETTINGS = "/Library/Application Support/ClaudeCode/managed-settings.json"
+# A command that chains or substitutes could smuggle anything past a prefix rule, so it
+# is never matched against one — the island asks and the user decides.
+SHELL_CHAINING = re.compile(r"&&|\|\||;|\||`|\$\(|>|<|\n")
 
 
-def should_ask(mode, tool):
+# `.git` is authoritative: the *outermost* repo within range is the project, so a
+# monorepo's package subdirectory never shadows the repository root's own settings.
+VCS_MARKERS = (".git",)
+# Weaker markers locate the root of a project that isn't a repo. They are consulted only
+# when no repo is found, because a language manifest also sits in every monorepo package.
+PROJECT_MARKERS = (".claude", "package.json", "Package.swift",
+                   "pyproject.toml", "Cargo.toml", "go.mod")
+
+
+def _project_root(cwd):
+    """The directory Claude Code treats as the project. The $HOME boundary is applied
+    *before* the marker test, so neither $HOME nor anything above it can ever become the
+    project — a dotfiles repo at $HOME must not turn sibling trees into project settings.
+    Within that bounded range the outermost repo wins, so a monorepo package doesn't
+    shadow the repository root's settings; a weak marker is used only when there is no
+    repo at all. Falls back to `cwd` when nothing matches."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    d = cwd
+    vcs = weak = None
+    while True:
+        parent = os.path.dirname(d)
+        # Stop before $HOME (compared through realpath, so a symlinked home still bounds
+        # the walk), the filesystem root, and top-level dirs such as /Users or /Volumes:
+        # none of those is ever a project, and accepting one would pull in `.claude` dirs
+        # belonging to unrelated trees.
+        if os.path.realpath(d) == home or parent == d or os.path.dirname(parent) == parent:
+            break
+        if any(os.path.exists(os.path.join(d, m)) for m in VCS_MARKERS):
+            vcs = d  # keep walking: a further-out repo supersedes this one
+        elif any(os.path.exists(os.path.join(d, m)) for m in PROJECT_MARKERS):
+            weak = d
+        d = parent
+    return vcs or weak or cwd
+
+
+def _settings_files(cwd):
+    """Every settings file Claude Code merges for a call in `cwd`, each paired with the
+    directory its relative path rules resolve against: managed policy, user settings, and
+    the project chain from its root down to `cwd` (Claude Code honors nested `.claude/`
+    dirs inside a project, but nothing above its root). Ordered outermost-first; buckets
+    are unioned rather than overridden, so the order only affects which rule is reported
+    first for an equally-matching pair."""
+    out = [(MANAGED_SETTINGS, "/")]
+    user_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    user_settings = os.path.join(user_dir, "settings.json")
+    out.append((user_settings, os.path.expanduser("~")))
+    d = os.path.abspath(cwd) if cwd else os.getcwd()
+    root = _project_root(d)
+    chain = []
+    while True:
+        chain.append(d)
+        parent = os.path.dirname(d)
+        if d == root or parent == d:
+            break
+        d = parent
+    for d in reversed(chain):
+        for name in ("settings.json", "settings.local.json"):
+            path = os.path.join(d, ".claude", name)
+            if path != user_settings:  # already added above, with its own base dir
+                out.append((path, d))
+    return out
+
+
+_RULES_CACHE = {}
+
+
+def load_rules(cwd):
+    """Merge `permissions.allow/ask/deny` from every settings file into
+    {bucket: [(rule, base_dir)]}. Unreadable or malformed files are skipped silently: a
+    broken settings file must not stop the island from prompting."""
+    if cwd in _RULES_CACHE:
+        return _RULES_CACHE[cwd]
+    rules = {"allow": [], "ask": [], "deny": []}
+    for path, base in _settings_files(cwd):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        perms = (data or {}).get("permissions") or {}
+        for bucket in rules:
+            for rule in perms.get(bucket) or []:
+                if isinstance(rule, str) and rule.strip():
+                    rules[bucket].append((rule.strip(), base))
+    _RULES_CACHE[cwd] = rules
+    return rules
+
+
+def _split_rule(rule):
+    """"Bash(git status:*)" -> ("Bash", "git status:*"); "Read" -> ("Read", None)."""
+    if rule.endswith(")") and "(" in rule:
+        name, _, spec = rule.partition("(")
+        return name.strip(), spec[:-1]
+    return rule, None
+
+
+def _norm_cmd(s):
+    return " ".join((s or "").split())
+
+
+def _bash_matches(spec, command):
+    """Claude Code's Bash rules are exact ("git status"), a prefix ("git status:*", and the
+    equivalent bare-`*` form "git pull *"), or a glob with an interior `*`.
+
+    Shell operators are judged per part rather than over the whole command: whatever the
+    rule itself spells out was approved by the user, so a rule that chains matches its own
+    chain. Only the tail a prefix rule leaves unspecified has to be operator-free, since
+    that tail is what could otherwise smuggle an extra command past a short prefix.
+    Newlines are checked on the raw command, because _norm_cmd collapses them and a
+    multiline command would otherwise read as a single line."""
+    raw = (command or "").strip()
+    if "\n" in raw and "\n" not in spec:
+        return False
+    cmd = _norm_cmd(command)
+    if not cmd:
+        return False
+    spec_norm = _norm_cmd(spec)
+    prefix = None
+    if spec.endswith(":*"):
+        prefix = _norm_cmd(spec[:-2])
+    elif spec_norm.endswith(" *"):
+        prefix = spec_norm[:-2].rstrip()  # "git pull *" is the same shape as "git pull:*"
+    if prefix is not None:
+        if not prefix:
+            return False
+        if cmd == prefix:
+            return True
+        if not cmd.startswith(prefix + " "):
+            return False
+        return not SHELL_CHAINING.search(cmd[len(prefix):])
+    if "*" in spec_norm:
+        pattern = "(.*)".join(re.escape(part) for part in spec_norm.split("*"))
+        match = re.match("^" + pattern + "$", cmd)
+        if not match:
+            return False
+        # Only the text a wildcard consumed is unvetted — the literal parts came from the
+        # rule itself. An operator inside an expansion could smuggle in a whole extra
+        # command, so each expansion is checked rather than the spec as a whole.
+        return not any(SHELL_CHAINING.search(part) for part in match.groups())
+    return cmd == spec_norm
+
+
+def _resolve_pattern(spec, base):
+    """`//abs/path` is filesystem-absolute, `~/x` home-relative, anything else relative to
+    the directory of the settings file that declared the rule."""
+    if spec.startswith("//"):
+        pattern = spec[1:]
+    elif spec == "~" or spec.startswith("~/"):
+        pattern = os.path.expanduser(spec)
+    else:
+        pattern = os.path.join(base, spec)
+    # Normalized to match the target, which _path_matches runs through abspath.
+    return os.path.normpath(pattern)
+
+
+def _glob_to_regex(pattern):
+    """gitignore-style globbing: `*` stops at a path separator, `**` crosses it."""
+    out = []
+    i = 0
+    while i < len(pattern):
+        if pattern[i] == "*":
+            if pattern[i:i + 2] == "**":
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*")
+        elif pattern[i] == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(pattern[i]))
+        i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def _path_matches(spec, target, base, cwd):
+    """A rule path matches the tool's target, or anything under it when the rule names a
+    bare directory (gitignore semantics). `base` resolves the rule's own pattern; a
+    relative target belongs to the session, so it resolves against `cwd`."""
+    if not target:
+        return False
+    target = os.path.abspath(os.path.join(cwd or os.getcwd(), os.path.expanduser(target)))
+    pattern = _resolve_pattern(spec, base)
+    if "*" in pattern or "?" in pattern:
+        return bool(_glob_to_regex(pattern).match(target))
+    pattern = os.path.abspath(pattern)
+    return target == pattern or target.startswith(pattern.rstrip("/") + "/")
+
+
+def _domain_matches(spec, url):
+    """WebFetch rules are written `domain:example.com` and cover subdomains."""
+    if not spec.startswith("domain:"):
+        return False
+    want = spec[len("domain:"):].strip().lower().lstrip(".")
+    m = re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://([^/?#]+)", url or "")
+    if not (want and m):
+        return False
+    host = m.group(1).rsplit("@", 1)[-1].split(":")[0].lower()
+    return host == want or host.endswith("." + want)
+
+
+def _rule_matches(rule, base, tool, tool_input, cwd):
+    name, spec = _split_rule(rule)
+    if name.startswith("mcp__"):
+        # `mcp__server` covers a whole server; `mcp__server__tool` one of its tools.
+        return tool == name or tool.startswith(name + "__")
+    if name != tool:
+        return False
+    if spec is None:
+        return True  # a bare tool name covers every use of that tool
+    if tool == "Bash":
+        return _bash_matches(spec, tool_input.get("command"))
+    if tool == "WebFetch":
+        return _domain_matches(spec, tool_input.get("url"))
+    key = PATH_TOOLS.get(tool)
+    if key:
+        return _path_matches(spec, tool_input.get(key), base, cwd)
+    return False  # specifier shape we don't understand — fall through and ask
+
+
+def rule_verdict(tool, tool_input, cwd):
+    """The user's own permission rules for this exact call: "deny", "ask", "allow", or
+    None when no rule applies. deny beats ask beats allow, as in Claude Code."""
+    if os.environ.get("AGENT_ISLE_IGNORE_RULES") == "1":
+        return None
+    try:
+        rules = load_rules(cwd)
+    except Exception:
+        return None
+    for bucket in ("deny", "ask", "allow"):
+        for rule, base in rules[bucket]:
+            try:
+                if _rule_matches(rule, base, tool, tool_input, cwd):
+                    return bucket
+            except Exception:
+                continue
+    return None
+
+
+def should_ask(mode, tool, tool_input=None, cwd=""):
     """Mirror when Claude Code would actually prompt, so the island intercepts the
     same requests instead of prompting on every tool or on none."""
+    tool_input = tool_input or {}
     if os.environ.get("AGENT_ISLE_APPROVALS") == "0":
         return False
     if mode == "bypassPermissions" or mode == "plan":
+        return False
+    # The user's own rules — including every "don't ask again" Claude Code has recorded —
+    # decide before any heuristic. A deny needs no prompt either: staying quiet lets
+    # Claude Code block the call itself, and an `ask` rule outranks acceptEdits.
+    verdict = rule_verdict(tool, tool_input, cwd)
+    if verdict == "ask":
+        return True
+    if verdict in ("allow", "deny"):
         return False
     if tool in READONLY_TOOLS:
         return False
@@ -277,7 +536,7 @@ def main():
                     post(dict(base, type="status", status="working",
                               message="Presented a plan"))
                 sys.exit(0)
-            if should_ask(mode, tool):
+            if should_ask(mode, tool, tin, cwd):
                 event = dict(base, type="permission", tool=tool,
                              file=short_path(tin.get("file_path")),
                              command=tin.get("command"),
@@ -300,8 +559,14 @@ def main():
                 }))
             else:
                 # Non-blocking: just report activity, let Claude Code proceed normally.
+                # A deny-matched call never runs — Claude Code blocks it — so don't
+                # report it as running. Modes that skip permission evaluation run the
+                # call regardless, so don't claim it was blocked there (and don't pay for
+                # a rule scan should_ask deliberately skipped).
+                blocked = (mode not in ("bypassPermissions", "plan")
+                           and rule_verdict(tool, tin, cwd) == "deny")
                 post(dict(base, type="status", status="working",
-                          message=f"Running {tool}"))
+                          message=f"Blocked {tool}" if blocked else f"Running {tool}"))
             sys.exit(0)
 
         elif kind == "posttooluse":
