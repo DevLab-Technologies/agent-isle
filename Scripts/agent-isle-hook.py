@@ -18,6 +18,7 @@ Usage:  agent-isle-hook.py <event-kind> [--agent <name>]
 """
 import json
 import os
+import re
 import sys
 import urllib.request
 
@@ -31,14 +32,196 @@ READONLY_TOOLS = {
 }
 # Tools that are auto-approved specifically in acceptEdits mode.
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "Update"}
+# Tools whose rule specifier is a gitignore-style path, and the input key holding it.
+PATH_TOOLS = {
+    "Read": "file_path", "Edit": "file_path", "Write": "file_path",
+    "MultiEdit": "file_path", "NotebookEdit": "notebook_path",
+    "Glob": "path", "Grep": "path", "LS": "path",
+}
+# Enterprise policy file (macOS); merged like any other settings file.
+MANAGED_SETTINGS = "/Library/Application Support/ClaudeCode/managed-settings.json"
+# A command that chains or substitutes could smuggle anything past a prefix rule, so it
+# is never matched against one — the island asks and the user decides.
+SHELL_CHAINING = re.compile(r"&&|\|\||;|\||`|\$\(|>|<|\n")
 
 
-def should_ask(mode, tool):
+def _settings_files(cwd):
+    """Every settings file Claude Code merges for a call in `cwd`, each paired with the
+    directory its relative path rules resolve against. Ordered outermost-first; buckets
+    are unioned rather than overridden, so the order only affects which rule is reported
+    first for an equally-matching pair."""
+    out = [(MANAGED_SETTINGS, "/")]
+    user_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    out.append((os.path.join(user_dir, "settings.json"), os.path.expanduser("~")))
+    chain = []
+    d = os.path.abspath(cwd) if cwd else os.getcwd()
+    while True:
+        chain.append(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    for d in reversed(chain):
+        for name in ("settings.json", "settings.local.json"):
+            out.append((os.path.join(d, ".claude", name), d))
+    return out
+
+
+_RULES_CACHE = {}
+
+
+def load_rules(cwd):
+    """Merge `permissions.allow/ask/deny` from every settings file into
+    {bucket: [(rule, base_dir)]}. Unreadable or malformed files are skipped silently: a
+    broken settings file must not stop the island from prompting."""
+    if cwd in _RULES_CACHE:
+        return _RULES_CACHE[cwd]
+    rules = {"allow": [], "ask": [], "deny": []}
+    for path, base in _settings_files(cwd):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        perms = (data or {}).get("permissions") or {}
+        for bucket in rules:
+            for rule in perms.get(bucket) or []:
+                if isinstance(rule, str) and rule.strip():
+                    rules[bucket].append((rule.strip(), base))
+    _RULES_CACHE[cwd] = rules
+    return rules
+
+
+def _split_rule(rule):
+    """"Bash(git status:*)" -> ("Bash", "git status:*"); "Read" -> ("Read", None)."""
+    if rule.endswith(")") and "(" in rule:
+        name, _, spec = rule.partition("(")
+        return name.strip(), spec[:-1]
+    return rule, None
+
+
+def _norm_cmd(s):
+    return " ".join((s or "").split())
+
+
+def _bash_matches(spec, command):
+    """Claude Code's Bash rules are exact ("git status") or a prefix ("git status:*")."""
+    cmd = _norm_cmd(command)
+    if not cmd or SHELL_CHAINING.search(cmd):
+        return False
+    if spec.endswith(":*"):
+        prefix = _norm_cmd(spec[:-2])
+        return bool(prefix) and (cmd == prefix or cmd.startswith(prefix + " "))
+    return cmd == _norm_cmd(spec)
+
+
+def _resolve_pattern(spec, base):
+    """`//abs/path` is filesystem-absolute, `~/x` home-relative, anything else relative to
+    the directory of the settings file that declared the rule."""
+    if spec.startswith("//"):
+        return spec[1:]
+    if spec == "~" or spec.startswith("~/"):
+        return os.path.expanduser(spec)
+    return os.path.join(base, spec)
+
+
+def _glob_to_regex(pattern):
+    """gitignore-style globbing: `*` stops at a path separator, `**` crosses it."""
+    out = []
+    i = 0
+    while i < len(pattern):
+        if pattern[i] == "*":
+            if pattern[i:i + 2] == "**":
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*")
+        elif pattern[i] == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(pattern[i]))
+        i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def _path_matches(spec, target, base):
+    """A rule path matches the tool's target, or anything under it when the rule names a
+    bare directory (gitignore semantics)."""
+    if not target:
+        return False
+    target = os.path.abspath(os.path.join(base, os.path.expanduser(target)))
+    pattern = _resolve_pattern(spec, base)
+    if "*" in pattern or "?" in pattern:
+        return bool(_glob_to_regex(pattern).match(target))
+    pattern = os.path.abspath(pattern)
+    return target == pattern or target.startswith(pattern.rstrip("/") + "/")
+
+
+def _domain_matches(spec, url):
+    """WebFetch rules are written `domain:example.com` and cover subdomains."""
+    if not spec.startswith("domain:"):
+        return False
+    want = spec[len("domain:"):].strip().lower().lstrip(".")
+    m = re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://([^/?#]+)", url or "")
+    if not (want and m):
+        return False
+    host = m.group(1).rsplit("@", 1)[-1].split(":")[0].lower()
+    return host == want or host.endswith("." + want)
+
+
+def _rule_matches(rule, base, tool, tool_input):
+    name, spec = _split_rule(rule)
+    if name.startswith("mcp__"):
+        # `mcp__server` covers a whole server; `mcp__server__tool` one of its tools.
+        return tool == name or tool.startswith(name + "__")
+    if name != tool:
+        return False
+    if spec is None:
+        return True  # a bare tool name covers every use of that tool
+    if tool == "Bash":
+        return _bash_matches(spec, tool_input.get("command"))
+    if tool == "WebFetch":
+        return _domain_matches(spec, tool_input.get("url"))
+    key = PATH_TOOLS.get(tool)
+    if key:
+        return _path_matches(spec, tool_input.get(key), base)
+    return False  # specifier shape we don't understand — fall through and ask
+
+
+def rule_verdict(tool, tool_input, cwd):
+    """The user's own permission rules for this exact call: "deny", "ask", "allow", or
+    None when no rule applies. deny beats ask beats allow, as in Claude Code."""
+    if os.environ.get("AGENT_ISLE_IGNORE_RULES") == "1":
+        return None
+    try:
+        rules = load_rules(cwd)
+    except Exception:
+        return None
+    for bucket in ("deny", "ask", "allow"):
+        for rule, base in rules[bucket]:
+            try:
+                if _rule_matches(rule, base, tool, tool_input):
+                    return bucket
+            except Exception:
+                continue
+    return None
+
+
+def should_ask(mode, tool, tool_input=None, cwd=""):
     """Mirror when Claude Code would actually prompt, so the island intercepts the
     same requests instead of prompting on every tool or on none."""
+    tool_input = tool_input or {}
     if os.environ.get("AGENT_ISLE_APPROVALS") == "0":
         return False
     if mode == "bypassPermissions" or mode == "plan":
+        return False
+    # The user's own rules — including every "don't ask again" Claude Code has recorded —
+    # decide before any heuristic. A deny needs no prompt either: staying quiet lets
+    # Claude Code block the call itself, and an `ask` rule outranks acceptEdits.
+    verdict = rule_verdict(tool, tool_input, cwd)
+    if verdict == "ask":
+        return True
+    if verdict in ("allow", "deny"):
         return False
     if tool in READONLY_TOOLS:
         return False
@@ -277,7 +460,7 @@ def main():
                     post(dict(base, type="status", status="working",
                               message="Presented a plan"))
                 sys.exit(0)
-            if should_ask(mode, tool):
+            if should_ask(mode, tool, tin, cwd):
                 event = dict(base, type="permission", tool=tool,
                              file=short_path(tin.get("file_path")),
                              command=tin.get("command"),
