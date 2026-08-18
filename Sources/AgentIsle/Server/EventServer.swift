@@ -69,7 +69,10 @@ final class EventServer {
 
         func readMore() {
             conn.receive(minimumIncompleteLength: 1, maximumLength: Self.maxRequestSize) { [weak self] data, _, isComplete, error in
-                Task { @MainActor in
+                // `self` is re-captured on the Task rather than read inside it: the receive
+                // closure's `self` is a captured optional var, and reading that from the
+                // concurrently-executing Task body is rejected by older Swift toolchains.
+                Task { @MainActor [weak self] in
                     guard let self else { return }
                     guard let data, !data.isEmpty else {
                         if isComplete || error != nil { conn.cancel() }
