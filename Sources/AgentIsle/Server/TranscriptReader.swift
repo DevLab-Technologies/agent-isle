@@ -358,11 +358,11 @@ enum TranscriptReader {
         let ts = (obj["timestamp"] as? String).flatMap { iso.date(from: $0) }
         let content = message["content"]
 
-        // A user entry with plain-string content is a real human prompt.
+        // A user entry with plain-string content is a real human prompt — unless it is one
+        // of Claude Code's injected envelopes, which `ChatNoise` condenses or drops.
         if type == "user", let str = content as? String {
-            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
-            return ChatMessage(id: uuid, role: .user, blocks: [.text(clamp(trimmed, 4000))], timestamp: ts)
+            guard let block = userBlock(str) else { return nil }
+            return ChatMessage(id: uuid, role: .user, blocks: [block], timestamp: ts)
         }
 
         guard let arr = content as? [[String: Any]] else { return nil }
@@ -371,8 +371,14 @@ enum TranscriptReader {
         for block in arr {
             switch block["type"] as? String {
             case "text":
-                if let t = (block["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
-                    blocks.append(.text(clamp(t, 4000)))
+                if let t = block["text"] as? String {
+                    // Same envelope handling as the plain-string case above; assistant text
+                    // is passed through untouched.
+                    if type == "user" {
+                        if let b = userBlock(t) { blocks.append(b) }
+                    } else if !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        blocks.append(.text(clamp(t.trimmingCharacters(in: .whitespacesAndNewlines), 4000)))
+                    }
                 }
             case "thinking":
                 if let t = (block["thinking"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
@@ -394,6 +400,15 @@ enum TranscriptReader {
         // so render them on the assistant side.
         let role: ChatMessage.Role = (type == "assistant" || sawToolResult) ? .assistant : .user
         return ChatMessage(id: uuid, role: role, blocks: blocks, timestamp: ts)
+    }
+
+    /// One user-turn string as a renderable block, or nil when it is pure machinery.
+    private static func userBlock(_ raw: String) -> ChatBlock? {
+        switch ChatNoise.sanitize(raw) {
+        case .message(let t): return .text(clamp(t, 4000))
+        case .notice(let t):  return .notice(t)
+        case .drop:           return nil
+        }
     }
 
     /// Pull a concise target out of a tool-call input dict (path, command, pattern…).

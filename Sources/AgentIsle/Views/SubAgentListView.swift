@@ -70,7 +70,7 @@ private struct SubAgentRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(agent.lastMessage)
-                    .font(Theme.Font.body(9.5))
+                    .font(Theme.Font.prose(10))
                     .foregroundStyle(Theme.Ink.tertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)

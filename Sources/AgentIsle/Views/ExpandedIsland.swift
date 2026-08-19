@@ -4,6 +4,11 @@ import SwiftUI
 struct ExpandedIsland: View {
     let notchWidth: CGFloat
     let notchHeight: CGFloat
+    /// True in the notch window, where the panel's top edge meets the display bezel and
+    /// the notch-continuous silhouette is correct. False in the menu-bar popover, which
+    /// floats: there the panel is an ordinary rounded card inside the popover's own
+    /// chrome, and it must not carry the flare, the square top, or a second shadow.
+    var attachedToNotch: Bool = true
     @EnvironmentObject var store: SessionStore
     @EnvironmentObject var settings: AppSettings
     @ObservedObject private var usage = UsageStore.shared
@@ -13,7 +18,10 @@ struct ExpandedIsland: View {
     var body: some View {
         VStack(spacing: 0) {
             notchBar           // occupies the physical-notch band; content only in the ears
+            // Inset past the top flare so the rule stops short of the curved edge
+            // instead of running into it.
             Divider().overlay(Theme.Fill.hairline)
+                .padding(.horizontal, ruleInset)
             usageReadoutBar
             if let session = store.openedSession {
                 SessionChatView(session: session)
@@ -23,18 +31,33 @@ struct ExpandedIsland: View {
         }
         .frame(width: panelWidth)
         .task { await usage.refresh() }   // warm the rolling-window readout when the panel opens
-        .background(
-            NotchShape(bottomRadius: 26)
-                .fill(.black)
-        )
-        .overlay(
-            NotchShape(bottomRadius: 26)
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+        .background(surface)
+        // The popover draws its own shadow; a second one under the card just muddies it.
+        .shadow(color: .black.opacity(attachedToNotch ? 0.5 : 0), radius: 24, y: 10)
         .fixedSize()
         .background(panelHotkeys)
     }
+
+    /// The panel's black: notch-continuous when it hangs off the screen edge, an ordinary
+    /// rounded card when it floats inside the menu-bar popover.
+    @ViewBuilder private var surface: some View {
+        if attachedToNotch {
+            surface(NotchShape(topRadius: Theme.Radius.notchFlare, bottomRadius: 26))
+        } else {
+            surface(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
+        }
+    }
+
+    private func surface<S: Shape>(_ shape: S) -> some View {
+        ZStack {
+            shape.fill(.black)
+            shape.stroke(Theme.Fill.rim, lineWidth: 0.75)
+        }
+    }
+
+    /// How far the internal rules must stop short of the panel's sides: past the flare when
+    /// attached, flush with the rounded card otherwise.
+    private var ruleInset: CGFloat { attachedToNotch ? Theme.Radius.notchFlare : Theme.Space.sm }
 
     /// Panel-wide shortcuts, active while the expanded island is the key window: Esc
     /// collapses (closing an open chat first), ⌘J jumps to the focused session. Hidden
@@ -124,6 +147,7 @@ struct ExpandedIsland: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 5)
             Divider().overlay(Theme.Fill.hairline)
+                .padding(.horizontal, ruleInset)
         }
     }
 
@@ -214,6 +238,19 @@ struct ExpandedIsland: View {
             }
             .padding(Theme.Space.lg)
         }
+        .scrollIndicators(.never)
+        // The list clips mid-row when it overflows; fading the last few points makes that
+        // read as "more below" rather than as a row cut in half by the panel edge. The fade
+        // is a fixed height matching the list's own bottom padding — as a fraction it would
+        // dim the last row even when the list fits and there is nothing more to scroll to.
+        .mask(
+            VStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .black.opacity(0)],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: Theme.Space.lg)
+            }
+        )
         .frame(maxHeight: CGFloat(settings.maxPanelHeight))
     }
 
@@ -263,7 +300,7 @@ struct ExpandedIsland: View {
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.8))
             Text("Start a Claude Code, Grok, or Copilot\nsession and it'll appear here.")
-                .font(.system(size: 11, design: .monospaced))
+                .font(Theme.Font.prose(11.5))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.4))
             Button("Try demo mode") { store.startDemo() }

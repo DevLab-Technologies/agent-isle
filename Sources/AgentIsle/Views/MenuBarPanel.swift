@@ -11,7 +11,7 @@ struct MenuBarPanel: View {
     @EnvironmentObject var settings: AppSettings
 
     var body: some View {
-        ExpandedIsland(notchWidth: 0, notchHeight: 34)
+        ExpandedIsland(notchWidth: 0, notchHeight: 34, attachedToNotch: false)
             .padding(6)
             // Re-run the panel's spring layout when the session set or open chat changes,
             // matching the notch island's animation feel.

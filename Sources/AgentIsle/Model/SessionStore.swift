@@ -36,6 +36,12 @@ final class SessionStore: ObservableObject {
     /// shrink to fit — otherwise a full-screen panel would eat clicks everywhere.
     @Published var islandSize: CGSize = CGSize(width: 520, height: 64)
 
+    /// How far the rendered island is shifted from the window's center line. The collapsed
+    /// pill sizes each ear to its own content and then slides itself so the notch gap stays
+    /// on the notch; the click-through rect has to follow, or hover and taps drift off it.
+    /// Zero for the expanded panel, which is symmetric.
+    @Published var islandOffsetX: CGFloat = 0
+
     // MARK: - Live chat
 
     /// The session whose full conversation is currently open, or nil for the list view.
