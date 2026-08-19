@@ -38,8 +38,8 @@ struct SessionChatView: View {
                     .foregroundStyle(.white.opacity(0.95))
                     .lineLimit(1)
                 Text("\(session.agent.displayName) · \(session.terminal)")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .font(Theme.Font.label(9.5, weight: .regular))
+                    .foregroundStyle(Theme.Ink.tertiary)
                     .lineLimit(1)
             }
 
@@ -85,6 +85,21 @@ struct SessionChatView: View {
                 }
                 .padding(12)
             }
+            .scrollIndicators(.never)
+            // The transcript is clipped top and bottom; fading those edges reads as
+            // "more above/below" instead of a bubble sliced by the panel border. Fixed
+            // heights matching the list padding, so a short conversation isn't dimmed.
+            .mask(
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(0), .black],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: Theme.Space.md)
+                    Rectangle()
+                    LinearGradient(colors: [.black, .black.opacity(0)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: Theme.Space.md)
+                }
+            )
             .frame(maxHeight: 300)
             .onChange(of: store.openedMessages.count) {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
@@ -107,7 +122,7 @@ struct SessionChatView: View {
 
     private func chatNotice(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, design: .monospaced))
+            .font(Theme.Font.prose(11.5))
             .multilineTextAlignment(.center)
             .foregroundStyle(.white.opacity(0.35))
             .frame(maxWidth: .infinity)
@@ -126,7 +141,7 @@ struct SessionChatView: View {
             HStack(spacing: 8) {
                 TextField("Message \(session.agent.displayName)…", text: $draft)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Theme.Font.prose(12))
                     .foregroundStyle(.white.opacity(0.95))
                     .focused($inputFocused)
                     .onSubmit(send)
@@ -167,15 +182,25 @@ struct ChatMessageView: View {
     let message: ChatMessage
     let tint: Color
 
+    /// A turn that is nothing but machine notices belongs to neither side of the
+    /// conversation, so it runs centered across the full width instead of as a bubble.
+    private var isSystemNotice: Bool {
+        !message.blocks.isEmpty && message.blocks.allSatisfy {
+            if case .notice = $0 { return true } else { return false }
+        }
+    }
+
     var body: some View {
         HStack {
-            if message.role == .user { Spacer(minLength: 32) }
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 5) {
+            if message.role == .user, !isSystemNotice { Spacer(minLength: 32) }
+            VStack(alignment: isSystemNotice ? .center : (message.role == .user ? .trailing : .leading),
+                   spacing: 5) {
                 ForEach(Array(message.blocks.enumerated()), id: \.offset) { _, block in
                     blockView(block)
                 }
             }
-            if message.role == .assistant { Spacer(minLength: 32) }
+            .frame(maxWidth: isSystemNotice ? .infinity : nil)
+            if message.role == .assistant, !isSystemNotice { Spacer(minLength: 32) }
         }
     }
 
@@ -183,18 +208,26 @@ struct ChatMessageView: View {
         switch block {
         case .text(let text):
             Text(text)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(Theme.Font.prose(11.5))
                 .foregroundStyle(.white.opacity(message.role == .user ? 0.95 : 0.85))
                 .textSelection(.enabled)
-                .padding(.horizontal, 10).padding(.vertical, 7)
+                .padding(.horizontal, Theme.Space.md).padding(.vertical, 7)
+                // One surface per bubble: the fill alone separates the roles, so the ring
+                // that used to outline every bubble is gone.
                 .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(message.role == .user ? tint.opacity(0.18) : Color.white.opacity(0.05))
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(message.role == .user ? tint.opacity(0.16) : Theme.Fill.card)
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(message.role == .user ? tint.opacity(0.3) : Color.white.opacity(0.06), lineWidth: 0.5)
-                )
+        case .notice(let text):
+            HStack(spacing: 5) {
+                Image(systemName: "bell.badge")
+                    .font(.system(size: 8))
+                Text(text)
+                    .font(Theme.Font.prose(10))
+                    .lineLimit(2)
+            }
+            .foregroundStyle(Theme.Ink.faint)
+            .padding(.horizontal, Theme.Space.sm).padding(.vertical, 3)
         case .thinking(let text):
             HStack(alignment: .top, spacing: 5) {
                 Image(systemName: "brain")
@@ -220,12 +253,18 @@ struct ChatMessageView: View {
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(Capsule().fill(tint.opacity(0.08)))
         case .toolResult(let text):
+            // Tool output stays monospaced — it is literal terminal text — but hangs off a
+            // rule instead of sitting in a card, so it reads as a margin note next to the
+            // tool call rather than as another message.
             Text(text)
-                .font(.system(size: 9.5, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.3))
-                .lineLimit(3)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
+                .font(Theme.Font.body(9.5))
+                .foregroundStyle(Theme.Ink.faint)
+                .lineLimit(2)
+                .padding(.leading, Theme.Space.md)
+                .overlay(alignment: .leading) {
+                    Capsule().fill(Theme.Fill.hairline).frame(width: 2)
+                }
+                .padding(.vertical, 2)
         }
     }
 }

@@ -59,12 +59,17 @@ final class NotchWindow: NSPanel {
         self.hosting = hostingView
 
         positionWindow()
-        updateHitRegion(store.islandSize)
+        updateHitRegion(store.islandSize, offsetX: store.islandOffsetX)
 
-        // Only the hit region tracks the island size; the window itself stays put.
-        cancellable = store.$islandSize
-            .removeDuplicates { abs($0.width - $1.width) < 0.5 && abs($0.height - $1.height) < 0.5 }
-            .sink { [weak self] size in self?.updateHitRegion(size) }
+        // Only the hit region tracks the island's size and shift; the window stays put.
+        cancellable = Publishers.CombineLatest(store.$islandSize, store.$islandOffsetX)
+            .removeDuplicates { a, b in
+                abs(a.0.width - b.0.width) < 0.5 && abs(a.0.height - b.0.height) < 0.5
+                    && abs(a.1 - b.1) < 0.5
+            }
+            // Both values come from the publisher, never re-read off the store: @Published
+            // fires in `willSet`, so the property still holds the previous value here.
+            .sink { [weak self] size, offsetX in self?.updateHitRegion(size, offsetX: offsetX) }
 
         // Take key focus while the panel is explicitly expanded (clicked open) or a chat
         // is open, so in-panel keyboard shortcuts and the chat text field receive input.
@@ -170,10 +175,11 @@ final class NotchWindow: NSPanel {
 
     /// The island renders at the top-center of the fixed window; mark exactly that
     /// rect (plus a little padding) as clickable so everything else stays click-through.
-    private func updateHitRegion(_ islandSize: CGSize) {
+    private func updateHitRegion(_ islandSize: CGSize, offsetX: CGFloat) {
         let w = islandSize.width + hitPadding * 2
         let h = islandSize.height + hitPadding * 2
-        let x = (fixedWidth - w) / 2
+        // The island is centered in the window, then shifted by `islandOffsetX`.
+        let x = (fixedWidth - w) / 2 + offsetX
         let y = fixedHeight - h   // top-aligned
         (contentView as? PassthroughView)?.interactiveRect = NSRect(x: x, y: y, width: w, height: h)
         // The rect just changed, so a stationary pointer may now be outside it even
@@ -194,7 +200,7 @@ final class NotchWindow: NSPanel {
     func reposition() {
         applySpaceBehavior()
         positionWindow()
-        updateHitRegion(store.islandSize)
+        updateHitRegion(store.islandSize, offsetX: store.islandOffsetX)
     }
 
     /// Recompute notch geometry (after the user tunes it) and rebuild the island.
@@ -203,7 +209,7 @@ final class NotchWindow: NSPanel {
         geometry = NotchGeometry.current()
         hosting?.rootView = makeRoot()
         positionWindow()
-        updateHitRegion(store.islandSize)
+        updateHitRegion(store.islandSize, offsetX: store.islandOffsetX)
     }
 
     override var canBecomeKey: Bool { true }

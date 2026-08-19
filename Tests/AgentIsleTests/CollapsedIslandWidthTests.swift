@@ -13,8 +13,13 @@ import SwiftUI
 final class CollapsedIslandWidthTests: XCTestCase {
     private let notchWidth: CGFloat = 185
     private let notchHeight: CGFloat = 32
-    /// Ear cap (176) on both sides + the `Theme.Space.md` gutters + the notch gap.
-    private var cappedWidth: CGFloat { 176 * 2 + 10 * 2 + notchWidth }
+    /// Both ears at the cap + the outer insets + the `Theme.Space.md` gutters + the gap.
+    /// Nothing reaches this in practice any more — each ear hugs its own content — but it
+    /// is still the hard ceiling on how wide the pill can ever get.
+    private var cappedWidth: CGFloat {
+        CollapsedPillLayout(leftNatural: .greatestFiniteMagnitude,
+                            rightNatural: .greatestFiniteMagnitude).width(notchWidth: notchWidth)
+    }
 
     private var savedStyle = CollapsedStyle.detailed
     private var savedSubAgents = true
@@ -57,10 +62,14 @@ final class CollapsedIslandWidthTests: XCTestCase {
         XCTAssertGreaterThan(width, notchWidth, "pill must still be wider than the notch gap")
     }
 
+    /// The left ear stops growing at the cap; the right ear keeps hugging its own (small)
+    /// content, so the pill lands well short of the both-ears-capped ceiling.
     func testLongTitleStopsAtTheEarCap() {
         let width = pillWidth(title: "agentpeek-app-review-fff69c · feature/some-very-long-branch")
-        XCTAssertEqual(width, cappedWidth, accuracy: 1,
-                       "a long title should stop at the ear cap, got \(width)")
+        let capped = CollapsedPillLayout(leftNatural: .greatestFiniteMagnitude, rightNatural: 0)
+        XCTAssertEqual(width, capped.width(notchWidth: notchWidth), accuracy: 1,
+                       "left ear should sit at the cap with the right ear hugging, got \(width)")
+        XCTAssertLessThan(width, cappedWidth, "a lone long title must not widen the right ear")
     }
 
     /// Both titles sit under the ear cap, so this measures the hugging itself rather than
@@ -78,6 +87,35 @@ final class CollapsedIslandWidthTests: XCTestCase {
             XCTAssertLessThanOrEqual(pillWidth(title: title), cappedWidth + 1,
                                      "pill overflowed the cap for \(title.prefix(24))")
         }
+    }
+
+    // MARK: - Gap centering
+
+    /// The whole point of the shift: however lopsided the ears, the transparent gap must
+    /// end up on the window's center line, because that is where the physical notch is.
+    func testGapStaysCenteredForAnyEarPair() {
+        for (l, r) in [(0.0, 0.0), (200.0, 12.0), (12.0, 200.0), (40.0, 95.0), (156.0, 30.0)] {
+            let layout = CollapsedPillLayout(leftNatural: l, rightNatural: r)
+            let pillCenter = layout.width(notchWidth: notchWidth) / 2
+            let shiftedGapCenter = layout.gapCenter(notchWidth: notchWidth) + layout.offsetX
+            XCTAssertEqual(shiftedGapCenter, pillCenter, accuracy: 0.001,
+                           "gap drifted off center for ears (\(l), \(r))")
+        }
+    }
+
+    /// Equal ears need no shift — the case the old equal-width rule forced everything into.
+    func testEqualEarsNeedNoShift() {
+        XCTAssertEqual(CollapsedPillLayout(leftNatural: 80, rightNatural: 80).offsetX, 0)
+    }
+
+    /// Ears never collapse below the minimum or grow past the cap.
+    func testEarsAreClamped() {
+        let tiny = CollapsedPillLayout(leftNatural: 0, rightNatural: 1)
+        XCTAssertEqual(tiny.left, CollapsedPillLayout.minEar)
+        XCTAssertEqual(tiny.right, CollapsedPillLayout.minEar)
+        let huge = CollapsedPillLayout(leftNatural: 9_000, rightNatural: 9_000)
+        XCTAssertEqual(huge.left, CollapsedPillLayout.maxEar)
+        XCTAssertEqual(huge.right, CollapsedPillLayout.maxEar)
     }
 
     /// Clean style drops the status dot and agent glyph. Now that ears hug their content that

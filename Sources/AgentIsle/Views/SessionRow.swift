@@ -85,7 +85,7 @@ struct SessionRow: View {
                     }
                 }
                 Text(session.lastMessage)
-                    .font(Theme.Font.body(10.5))
+                    .font(Theme.Font.prose(11))
                     .foregroundStyle(Theme.Ink.secondary)
                     .lineLimit(1)
                 // Status + terminal + token meter, the calm bottom line.
@@ -93,10 +93,10 @@ struct SessionRow: View {
                     StatusPill(status: session.status)
                     if settings.showModel, let model = session.model {
                         Text(model)
-                            .font(Theme.Font.label(9, weight: .medium))
-                            .foregroundStyle(session.agent.tint)
-                            .padding(.horizontal, 5).padding(.vertical, 2)
-                            .background(Capsule().fill(session.agent.tint.opacity(0.12)))
+                            .font(Theme.Font.label(9.5, weight: .medium))
+                            // Neutral: the badge and the name tag already carry the agent's
+                            // hue, so a third tinted item on this line buys nothing but noise.
+                            .foregroundStyle(Theme.Ink.secondary)
                             .lineLimit(1)
                     }
                     if settings.showTerminal {
@@ -150,7 +150,7 @@ struct AgentBadge: View {
     var body: some View {
         Text(agent.glyph)
             .font(.system(size: size * 0.5, weight: .bold))
-            .foregroundStyle(agent.tint)
+            .foregroundStyle(agent.glyphTint)
             .frame(width: size, height: size)
             .background(
                 RoundedRectangle(cornerRadius: size * 0.3)
@@ -170,10 +170,9 @@ struct AgentTag: View {
     var body: some View {
         Text(agent.displayName)
             .font(Theme.Font.label(9, weight: .semibold))
-            .foregroundStyle(agent.tint)
+            .foregroundStyle(agent.glyphTint)
             .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(agent.tint.opacity(0.15)))
-            .overlay(Capsule().stroke(agent.tint.opacity(0.3), lineWidth: 0.5))
+            .background(Capsule().fill(agent.glyphTint.opacity(0.16)))
             .fixedSize()
     }
 }
@@ -187,7 +186,6 @@ struct StatusPill: View {
                 .font(Theme.Font.label(9, weight: .semibold))
                 .foregroundStyle(status.color)
         }
-        .padding(.horizontal, 6).padding(.vertical, 3)
-        .background(Capsule().fill(status.color.opacity(0.12)))
+        .padding(.trailing, 2)
     }
 }

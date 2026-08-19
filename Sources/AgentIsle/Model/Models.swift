@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Shared UI colors used outside the status enum.
@@ -65,6 +66,16 @@ enum AgentKind: String, Codable, CaseIterable, Identifiable {
         case .qwen: return Color(red: 0.60, green: 0.40, blue: 0.85)   // violet
         case .unknown: return Color.gray
         }
+    }
+
+    /// `tint` lifted toward white when it is too dark to read on the island's black
+    /// surface — Grok's near-black mark being the case that disappears entirely.
+    var glyphTint: Color {
+        guard let c = NSColor(tint).usingColorSpace(.sRGB) else { return tint }
+        let luma = 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        guard luma < 0.45 else { return tint }
+        let lift = (0.45 - luma) / 0.45
+        return Color(nsColor: c.blended(withFraction: lift, of: .white) ?? c)
     }
 
     /// Single-glyph mark shown in the compact badge.
@@ -353,6 +364,9 @@ struct SubAgent: Identifiable, Equatable {
 /// One piece of a chat message, rendered as its own block in the transcript view.
 enum ChatBlock: Equatable {
     case text(String)
+    /// A machine-injected user turn condensed to one line (see `ChatNoise`) — shown as a
+    /// dim system line rather than a chat bubble, because no human said it.
+    case notice(String)
     case thinking(String)
     case toolUse(name: String, detail: String?)
     case toolResult(String)

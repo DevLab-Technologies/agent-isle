@@ -26,6 +26,9 @@ struct IslandRootView: View {
             // Report the rendered island size so the window can shrink to fit it.
             if size.width > 1, size.height > 1 { store.islandSize = size }
         }
+        // Only the collapsed pill emits a shift; with the expanded panel on screen no view
+        // sets the key, so it falls back to the default of zero.
+        .onPreferenceChange(IslandOffsetKey.self) { store.islandOffsetX = $0 }
         .animation(.spring(response: 0.42, dampingFraction: 0.78), value: expanded)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.visibleSessions.map(\.id))
     }
@@ -66,31 +69,50 @@ struct IslandSizeKey: PreferenceKey {
     }
 }
 
-/// A notch-flush black container: square top corners (merging with the screen edge)
-/// and rounded bottom corners, like the real Dynamic Island.
+/// Carries the collapsed pill's horizontal shift up to the window, so the click-through
+/// rect can be placed over where the island actually renders.
+struct IslandOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+/// A notch-flush black container: it meets the top of the screen edge-to-edge, curves
+/// *inward* just below it (`topRadius`), and rounds off at the bottom — the silhouette of
+/// Apple's own notch surfaces, where the black appears to grow out of the display edge
+/// rather than being a rounded card hung underneath it. `topRadius: 0` gives the older
+/// straight-sided shape.
 struct NotchShape: Shape {
-    var topRadius: CGFloat = 8
+    /// Radius of the concave flare at the two top corners. The body below the flare is
+    /// inset by this much on each side, so content needs at least that much edge padding.
+    var topRadius: CGFloat = 0
     var bottomRadius: CGFloat = 22
 
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        let tr = min(topRadius, rect.width / 2)
-        let br = min(bottomRadius, rect.width / 2)
+        let tr = max(0, min(topRadius, rect.width / 4, rect.height / 2))
+        let left = rect.minX + tr
+        let right = rect.maxX - tr
+        let br = max(0, min(bottomRadius, (right - left) / 2, rect.height - tr))
 
         p.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        // top edge with slight inner curve
+        // Full-width top edge, flush with the screen bezel.
         p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        // right side down to bottom-right corner
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX - br, y: rect.maxY),
-                       control: CGPoint(x: rect.maxX, y: rect.maxY))
-        // bottom edge
-        p.addLine(to: CGPoint(x: rect.minX + br, y: rect.maxY))
-        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - br),
-                       control: CGPoint(x: rect.minX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        // Concave flare down into the right body edge.
+        p.addQuadCurve(to: CGPoint(x: right, y: rect.minY + tr),
+                       control: CGPoint(x: right, y: rect.minY))
+        p.addLine(to: CGPoint(x: right, y: rect.maxY - br))
+        p.addQuadCurve(to: CGPoint(x: right - br, y: rect.maxY),
+                       control: CGPoint(x: right, y: rect.maxY))
+        p.addLine(to: CGPoint(x: left + br, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: left, y: rect.maxY - br),
+                       control: CGPoint(x: left, y: rect.maxY))
+        p.addLine(to: CGPoint(x: left, y: rect.minY + tr))
+        // ...and back out through the left flare.
+        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.minY),
+                       control: CGPoint(x: left, y: rect.minY))
         p.closeSubpath()
-        _ = tr
         return p
     }
 }
