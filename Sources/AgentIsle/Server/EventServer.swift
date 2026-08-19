@@ -394,6 +394,9 @@ final class EventServer {
             if s.plan != nil       { s.plan = nil;       s.lastMessage = "Plan review expired" }
             if wasPending { s.status = .idle }
         }
+        // The abandoned prompt's own send attempt (if any) is moot now too — this settles to
+        // `.idle`, not `.done`, so `update(id:_:)`'s own clearing wouldn't otherwise catch it.
+        store.clearAllSendErrors(for: sessionID)
     }
 
     /// Drop a parked connection without a decision (the session ended or was removed).

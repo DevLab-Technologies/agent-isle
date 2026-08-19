@@ -53,29 +53,22 @@ final class SessionStore: ObservableObject {
         /// open System Settings on our own — see `AccessibilityPermission` — so this is the
         /// user's way there.
         let needsAccessibility: Bool
+        /// When this was reported — lets `sendError(for:)` prefer the newest failure across
+        /// kinds without a separate "most recent kind" side table to keep in sync by hand.
+        let reportedAt: Date
     }
     /// Transient errors surfaced after a failed send, one per (session, kind) — so a
     /// different kind starting or completing its own attempt can never discard another
     /// kind's still-unaddressed error; each kind only ever touches its own entry.
     @Published private var sendErrors: [SendAttemptKey: SendErrorInfo] = [:]
-    /// The kind `report(_:sessionID:kind:)` most recently wrote for a session, so
-    /// `sendError(for:)` can prefer the newest failure instead of an arbitrary fixed order.
-    private var mostRecentSendErrorKind: [UUID: SendKind] = [:]
     /// The failed-send notice to show for `sessionID`, if any — read by `SessionRow`/
-    /// `SessionChatView`. Only one notice fits in the UI, so this prefers the most recently
-    /// reported kind; an error not shown here isn't lost — it resurfaces once whichever is
-    /// currently shown gets cleared.
+    /// `SessionChatView`. Only one notice fits in the UI, so this picks the most recently
+    /// reported kind by `reportedAt`; an error not shown here isn't lost — it resurfaces once
+    /// whichever is currently shown gets cleared.
     func sendError(for sessionID: UUID) -> SendErrorInfo? {
-        if let mostRecent = mostRecentSendErrorKind[sessionID],
-           let info = sendErrors[SendAttemptKey(sessionID: sessionID, kind: mostRecent)] {
-            return info
-        }
-        for kind in SendKind.allCases {
-            if let info = sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] {
-                return info
-            }
-        }
-        return nil
+        SendKind.allCases
+            .compactMap { sendErrors[SendAttemptKey(sessionID: sessionID, kind: $0)] }
+            .max { $0.reportedAt < $1.reportedAt }
     }
 
     /// While a chat is open the panel stays pinned (won't auto-collapse on hover-out).
@@ -232,15 +225,12 @@ final class SessionStore: ObservableObject {
         // like `IdeWatcher` re-assert `.idle` on every scan tick, and unrelated actions (e.g.
         // denying a permission prompt) also land on `.idle` — neither means "this session's
         // send attempt is over," so clearing on those would wipe an unrelated, still-
-        // unaddressed error. Also forgets the `MessageSender` channel (not just the
-        // `sendErrors` entry) so a send still in flight can't resurrect it once it completes.
+        // unaddressed error. Sessions that never reach `.done` (hook-free ones tracked purely
+        // by transcript activity, or ones whose parked prompt is abandoned — see
+        // `EventServer.abandon`) don't get auto-cleared here; `archive(id:)`/`remove(id:)` are
+        // the user's own way to dismiss a banner that outlives its relevance.
         if s.status == .done && previousStatus != .done {
-            for kind in SendKind.allCases {
-                let key = SendAttemptKey(sessionID: id, kind: kind)
-                sendErrors[key] = nil
-                MessageSender.forgetChannel(key)
-            }
-            mostRecentSendErrorKind[id] = nil
+            clearAllSendErrors(for: id)
         }
         // An archived session that starts working (or needs attention) again should
         // resurface rather than stay dismissed forever.
@@ -256,13 +246,20 @@ final class SessionStore: ObservableObject {
         alwaysAllowed[id] = nil
         answeredTranscriptQuestions[id] = nil
         archivedIDs.remove(id)
+        clearAllSendErrors(for: id)
+        if id == openedSessionID { closeChat() }
+    }
+
+    /// Clear every outstanding send-error entry and `MessageSender` channel for `sessionID` —
+    /// the single choke point for "this session's pending sends are moot now," so `sendErrors`
+    /// and `MessageSender`'s per-channel state can't drift out of sync one call site at a time.
+    /// Called on removal, archival, and a genuine transition to `.done` (see `update(id:_:)`).
+    func clearAllSendErrors(for sessionID: UUID) {
         for kind in SendKind.allCases {
-            let key = SendAttemptKey(sessionID: id, kind: kind)
+            let key = SendAttemptKey(sessionID: sessionID, kind: kind)
             sendErrors[key] = nil
             MessageSender.forgetChannel(key)
         }
-        mostRecentSendErrorKind[id] = nil
-        if id == openedSessionID { closeChat() }
     }
 
     func clearAll() {
@@ -271,7 +268,6 @@ final class SessionStore: ObservableObject {
         alwaysAllowed.removeAll()
         archivedIDs.removeAll()
         sendErrors.removeAll()
-        mostRecentSendErrorKind.removeAll()
         MessageSender.forgetAllChannels()
         if openedSessionID != nil { closeChat() }
     }
@@ -280,9 +276,12 @@ final class SessionStore: ObservableObject {
 
     /// Dismiss a session from the island by hand — it drops out of `visibleSessions`
     /// immediately without waiting to age out. Most useful on a `.done` row. The session
-    /// resurfaces if it becomes active again (see `clearArchiveIfActive`).
+    /// resurfaces if it becomes active again (see `clearArchiveIfActive`), so any outstanding
+    /// send-error banner is cleared now — otherwise a stale one would resurface unchanged
+    /// alongside it, describing an attempt the user already dismissed.
     func archive(id: UUID) {
         archivedIDs.insert(id)
+        clearAllSendErrors(for: id)
         if id == openedSessionID { closeChat() }
     }
 
@@ -353,8 +352,8 @@ final class SessionStore: ObservableObject {
     /// should offer the Accessibility settings shortcut. Only ever touches `kind`'s own entry.
     private func report(_ error: MessageSender.SendError, sessionID: UUID, kind: SendKind) {
         sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] =
-            SendErrorInfo(message: error.userMessage, needsAccessibility: isAccessibilityDenied(error))
-        mostRecentSendErrorKind[sessionID] = kind
+            SendErrorInfo(message: error.userMessage, needsAccessibility: isAccessibilityDenied(error),
+                          reportedAt: Date())
         SoundPlayer.shared.play(.deny)
     }
 
@@ -368,9 +367,6 @@ final class SessionStore: ObservableObject {
     /// kind's entry.
     private func clearSendError(for sessionID: UUID, ifKind kind: SendKind) {
         sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] = nil
-        if mostRecentSendErrorKind[sessionID] == kind {
-            mostRecentSendErrorKind[sessionID] = nil
-        }
     }
 
     /// The three independent channels that deliver text into a session's host. Two of these

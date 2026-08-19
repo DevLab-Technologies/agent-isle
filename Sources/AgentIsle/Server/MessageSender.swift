@@ -86,11 +86,13 @@ enum MessageSender {
     }
 
     /// Send `text` into `session` on `channel`. If a later `send` call on the same `channel`
-    /// starts before this one resolves, this call is dropped as soon as that's detected —
-    /// before its side effect (typing, or running the AppleScript) runs, not just before its
-    /// completion — so callers only ever see, and only the terminal only ever receives, the
-    /// outcome of their most recent request on a given channel. The completion runs on the
-    /// main actor.
+    /// starts before this one resolves, this call's completion is dropped as soon as that's
+    /// detected — before its side effect (typing, or running the AppleScript) runs if it
+    /// hasn't started yet, so callers only ever see the outcome of their most recent request
+    /// on a given channel. This can't reach back into a side effect already in progress
+    /// (AppleScript execution in particular has no cancellation), so a resend that lands while
+    /// the previous one is still actively delivering can still have both reach the terminal —
+    /// see `runScriptOffMain`. The completion runs on the main actor.
     static func send(_ text: String, to session: AgentSession, channel: AnyHashable,
                      completion: @escaping (Result<Void, SendError>) -> Void) {
         let generation = beginAttempt(on: channel)
@@ -127,7 +129,11 @@ enum MessageSender {
         completion: @escaping (Result<Void, SendError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             // Re-check right before the script actually runs, not just before reporting the
-            // result: a superseded attempt must not touch the terminal at all.
+            // result, so a superseded attempt that hasn't started yet is skipped entirely.
+            // This can't help an attempt that's already mid-`executeAndReturnError` by the
+            // time it's superseded — AppleScript gives us no way to cancel a running call —
+            // so a resend that lands while the previous one is still blocked (e.g. on the
+            // one-time Automation permission prompt) can still have both land in the terminal.
             guard isCurrentAttempt(generation, on: channel) else { return }
             let result = runAppleScript(source, app: app)
             DispatchQueue.main.async { completion(result) }
@@ -191,11 +197,12 @@ enum MessageSender {
     private static func sendViaKeystrokes(_ text: String, to session: AgentSession,
                                           generation: Int, channel: AnyHashable,
                                           completion: @escaping (Result<Void, SendError>) -> Void) {
-        // Guard before any side effect at all, not just before typing: AccessibilityPermission
-        // .check() and Jumper.jump(to:) below have their own real effects (persisted streak
-        // state, a possible System Settings prompt, stealing focus) that a superseded attempt
-        // must not trigger either.
-        guard isCurrentAttempt(generation, on: channel) else { return }
+        // No currency guard before this point: `send()` calls `beginAttempt` and dispatches
+        // here synchronously on the main actor, with no suspension point in between, so this
+        // attempt is always current when it starts — a guard here could never observe
+        // otherwise as the code is structured today. `waitUntilFrontmost`'s completion below
+        // is the first point where real time has actually passed, so that's where the
+        // meaningful re-check belongs.
         switch AccessibilityPermission.check() {
         case .trusted:
             break
