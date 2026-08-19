@@ -46,41 +46,75 @@ enum MessageSender {
 
     // MARK: - Stale-completion guarding
 
+    /// Thread-safe backing store for the per-channel generation counters. A plain
+    /// `@MainActor`-isolated dictionary isn't enough: the AppleScript path checks currency from
+    /// a background queue (see `runAppleScript`), right before actually running the script, not
+    /// just around the completion — the guard has to stop the *side effect*, not merely filter
+    /// which outcome gets reported, or two overlapping sends on the same channel can both
+    /// actually type/script into the terminal with only the newer one's result ever shown.
+    private final class GenerationStore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [AnyHashable: Int] = [:]
+
+        func begin(_ channel: AnyHashable) -> Int {
+            lock.lock(); defer { lock.unlock() }
+            let next = (values[channel] ?? 0) + 1
+            values[channel] = next
+            return next
+        }
+
+        func isCurrent(_ generation: Int, on channel: AnyHashable) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            return values[channel] == generation
+        }
+
+        func forget(_ channel: AnyHashable) {
+            lock.lock(); defer { lock.unlock() }
+            values[channel] = nil
+        }
+
+        func forgetAll() {
+            lock.lock(); defer { lock.unlock() }
+            values.removeAll()
+        }
+    }
+
     /// Per-channel counter guarding against a stale, slow-to-complete send (e.g. the keystroke
-    /// path's frontmost-app poll in `waitUntilFrontmost`, which can take up to 1.5s) reporting
-    /// its outcome after a *later* send on the same channel has already resolved. Owned here,
-    /// not by callers: "exactly one outcome per channel, most-recent-wins" is this module's own
-    /// delivery contract, not something every caller should have to re-implement for each new
-    /// channel it invents (a caller only needs a `Hashable` value that names the channel — e.g.
-    /// a per-session, per-purpose key — not its own generation bookkeeping).
-    private static var generations: [AnyHashable: Int] = [:]
+    /// path's frontmost-app poll in `waitUntilFrontmost`, which can take up to 1.5s) actually
+    /// running its side effect — or reporting its outcome — after a *later* send on the same
+    /// channel has already resolved. Owned here, not by callers: "exactly one outcome per
+    /// channel, most-recent-wins" is this module's own delivery contract, not something every
+    /// caller should have to re-implement for each new channel it invents (a caller only needs
+    /// a `Hashable` value that names the channel — e.g. a per-session, per-purpose key — not
+    /// its own generation bookkeeping).
+    private static let generations = GenerationStore()
 
     static func beginAttempt(on channel: AnyHashable) -> Int {
-        let generation = (generations[channel] ?? 0) + 1
-        generations[channel] = generation
-        return generation
+        generations.begin(channel)
     }
 
     static func isCurrentAttempt(_ generation: Int, on channel: AnyHashable) -> Bool {
-        generations[channel] == generation
+        generations.isCurrent(generation, on: channel)
     }
 
     /// Forget a channel's tracked attempt. Call when the channel's owner (e.g. a removed
     /// session) can no longer act on an outcome, so `generations` doesn't grow forever.
     static func forgetChannel(_ channel: AnyHashable) {
-        generations[channel] = nil
+        generations.forget(channel)
     }
 
     /// Forget every tracked channel at once — cheaper than forgetting each individually when
     /// all owning state is being reset together (e.g. `SessionStore.clearAll()`).
     static func forgetAllChannels() {
-        generations.removeAll()
+        generations.forgetAll()
     }
 
     /// Send `text` into `session` on `channel`. If a later `send` call on the same `channel`
-    /// starts before this one resolves, this call's completion is dropped silently instead of
-    /// firing out of order — callers only ever see the outcome of their most recent request on
-    /// a given channel. The completion runs on the main actor.
+    /// starts before this one resolves, this call is dropped as soon as that's detected —
+    /// before its side effect (typing, or running the AppleScript) runs, not just before its
+    /// completion — so callers only ever see, and only the terminal only ever receives, the
+    /// outcome of their most recent request on a given channel. The completion runs on the
+    /// main actor.
     static func send(_ text: String, to session: AgentSession, channel: AnyHashable,
                      completion: @escaping (Result<Void, SendError>) -> Void) {
         let generation = beginAttempt(on: channel)
@@ -95,11 +129,13 @@ enum MessageSender {
 
         switch bundle {
         case iterm:
-            runScriptOffMain(itermScript(line), app: "iTerm2", completion: guarded)
+            runScriptOffMain(itermScript(line), app: "iTerm2", generation: generation, channel: channel,
+                             completion: guarded)
         case terminal:
-            runScriptOffMain(terminalScript(line), app: "Terminal", completion: guarded)
+            runScriptOffMain(terminalScript(line), app: "Terminal", generation: generation, channel: channel,
+                             completion: guarded)
         default:
-            sendViaKeystrokes(line, to: session, completion: guarded)
+            sendViaKeystrokes(line, to: session, generation: generation, channel: channel, completion: guarded)
         }
     }
 
@@ -111,9 +147,12 @@ enum MessageSender {
     /// so running it on the main thread would freeze the whole UI (and with it the Quit
     /// menu, leaving no way to exit this accessory app). Off-main, the UI stays responsive.
     nonisolated private static func runScriptOffMain(
-        _ source: String, app: String,
+        _ source: String, app: String, generation: Int, channel: AnyHashable,
         completion: @escaping (Result<Void, SendError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
+            // Re-check right before the script actually runs, not just before reporting the
+            // result: a superseded attempt must not touch the terminal at all.
+            guard generations.isCurrent(generation, on: channel) else { return }
             let result = runAppleScript(source, app: app)
             DispatchQueue.main.async { completion(result) }
         }
@@ -174,6 +213,7 @@ enum MessageSender {
     // MARK: - Keystroke fallback
 
     private static func sendViaKeystrokes(_ text: String, to session: AgentSession,
+                                          generation: Int, channel: AnyHashable,
                                           completion: @escaping (Result<Void, SendError>) -> Void) {
         switch AccessibilityPermission.check() {
         case .trusted:
@@ -192,6 +232,9 @@ enum MessageSender {
         // Waiting for real focus, and failing if it never comes, keeps "sent" honest.
         Jumper.jump(to: session)
         waitUntilFrontmost(Jumper.targetBundleID(for: session)) { focused in
+            // Re-check right before actually typing, not just before reporting the result: a
+            // superseded attempt must not touch the terminal at all (see `generations`).
+            guard isCurrentAttempt(generation, on: channel) else { return }
             guard focused else {
                 completion(.failure(.couldNotFocus(session.terminal)))
                 return
