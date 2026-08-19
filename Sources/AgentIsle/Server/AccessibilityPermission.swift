@@ -59,12 +59,14 @@ enum AccessibilityPermission {
     /// Check trust, showing the system prompt at most once. Never reopens System Settings on
     /// repeat attempts.
     static func check() -> Outcome {
-        var asked = AppSettings.shared.accessibilityPromptShown
+        let wasAsked = AppSettings.shared.accessibilityPromptShown
+        var asked = wasAsked
         let outcome = decide(isTrusted: isTrusted, alreadyAsked: asked)
         let shouldPrompt = record(outcome, alreadyAsked: &asked)
-        if asked != AppSettings.shared.accessibilityPromptShown {
+        if asked != wasAsked {
             AppSettings.shared.accessibilityPromptShown = asked
         }
+        recordDeniedStreak(trusted: outcome == .trusted)
         if shouldPrompt {
             let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
             _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
@@ -79,6 +81,38 @@ enum AccessibilityPermission {
     static func forgetAskIfTrusted() {
         guard AppSettings.shared.accessibilityPromptShown, isTrusted else { return }
         AppSettings.shared.accessibilityPromptShown = false
+        AppSettings.shared.accessibilityDeniedStreak = 0
+    }
+
+    /// The rule, free of system state so it can be tested: reset the streak once trust is
+    /// observed, otherwise grow it.
+    static func nextDeniedStreak(current: Int, trusted: Bool) -> Int {
+        trusted ? 0 : current + 1
+    }
+
+    /// Update the consecutive-denial streak, skipping the write on the common already-trusted,
+    /// already-zero path — the only case where `nextDeniedStreak` returns the same value it
+    /// was given.
+    private static func recordDeniedStreak(trusted: Bool) {
+        let current = AppSettings.shared.accessibilityDeniedStreak
+        let next = nextDeniedStreak(current: current, trusted: trusted)
+        if next != current {
+            AppSettings.shared.accessibilityDeniedStreak = next
+        }
+    }
+
+    /// The rule, free of system state so it can be tested: only warn of a stale grant once
+    /// several attempts in a row have found the app untrusted. A single `.alreadyAsked`
+    /// outcome isn't enough on its own — its preceding `.prompted` call may never have shown
+    /// a dialog (see `Outcome.prompted`), so the very next attempt shouldn't assume the user
+    /// already had a chance to react.
+    static func warnsStaleGrant(streak: Int) -> Bool {
+        streak > 2
+    }
+
+    /// True once `warnsStaleGrant` for the persisted streak — see its doc comment.
+    static var shouldWarnStaleGrant: Bool {
+        warnsStaleGrant(streak: AppSettings.shared.accessibilityDeniedStreak)
     }
 
     /// Open the Accessibility pane — only ever from an explicit user action.

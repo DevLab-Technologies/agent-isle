@@ -10,11 +10,12 @@ import AppKit
 @MainActor
 enum MessageSender {
     enum SendError: Error {
-        /// Not trusted for Accessibility. `askedBefore` means macOS was already asked to
-        /// prompt on an earlier attempt, so we won't ask again — the user either hasn't
-        /// finished granting it, or the grant belongs to another copy of the app (moved,
-        /// updated, or re-signed) while the switch still reads as enabled.
-        case accessibilityDenied(askedBefore: Bool)
+        /// Not trusted for Accessibility. `staleGrantSuspected` is NOT "macOS was already
+        /// asked" — a single ask doesn't prove a dialog ever appeared (see
+        /// `AccessibilityPermission.Outcome.prompted`) — it's true once repeated denials
+        /// (`AccessibilityPermission.shouldWarnStaleGrant`) make a stale grant likely enough
+        /// to suggest removing and re-adding the app.
+        case accessibilityDenied(staleGrantSuspected: Bool)
         case automationDenied(String)
         case couldNotFocus(String)
         case scriptFailed(String)
@@ -22,11 +23,11 @@ enum MessageSender {
         /// A short, user-facing explanation shown under the input bar.
         var userMessage: String {
             switch self {
-            case .accessibilityDenied(let askedBefore):
+            case .accessibilityDenied(let staleGrantSuspected):
                 // Neither message claims more than we know: macOS shows no prompt at all when
                 // the app is already listed under Accessibility, and a still-untrusted second
                 // attempt may just mean the user hasn't finished granting it yet.
-                return askedBefore
+                return staleGrantSuspected
                     ? "Still no Accessibility permission for Agent Isle. Turn it on in Accessibility settings — if it already looks enabled, this isn't the copy that was granted, so remove Agent Isle there, add this one back, and relaunch."
                     : "Agent Isle needs Accessibility permission to type into your session. Turn it on in Accessibility settings, then send again."
             case .automationDenied(let app):
@@ -43,20 +44,62 @@ enum MessageSender {
     private static let iterm = "com.googlecode.iterm2"
     private static let terminal = "com.apple.Terminal"
 
-    /// Send `text` into `session`. The completion runs on the main actor.
-    static func send(_ text: String, to session: AgentSession,
+    // MARK: - Stale-completion guarding
+
+    /// Per-channel counter guarding against a stale, slow-to-complete send (e.g. the keystroke
+    /// path's frontmost-app poll in `waitUntilFrontmost`, which can take up to 1.5s) reporting
+    /// its outcome after a *later* send on the same channel has already resolved. Owned here,
+    /// not by callers: "exactly one outcome per channel, most-recent-wins" is this module's own
+    /// delivery contract, not something every caller should have to re-implement for each new
+    /// channel it invents (a caller only needs a `Hashable` value that names the channel — e.g.
+    /// a per-session, per-purpose key — not its own generation bookkeeping).
+    private static var generations: [AnyHashable: Int] = [:]
+
+    static func beginAttempt(on channel: AnyHashable) -> Int {
+        let generation = (generations[channel] ?? 0) + 1
+        generations[channel] = generation
+        return generation
+    }
+
+    static func isCurrentAttempt(_ generation: Int, on channel: AnyHashable) -> Bool {
+        generations[channel] == generation
+    }
+
+    /// Forget a channel's tracked attempt. Call when the channel's owner (e.g. a removed
+    /// session) can no longer act on an outcome, so `generations` doesn't grow forever.
+    static func forgetChannel(_ channel: AnyHashable) {
+        generations[channel] = nil
+    }
+
+    /// Forget every tracked channel at once — cheaper than forgetting each individually when
+    /// all owning state is being reset together (e.g. `SessionStore.clearAll()`).
+    static func forgetAllChannels() {
+        generations.removeAll()
+    }
+
+    /// Send `text` into `session` on `channel`. If a later `send` call on the same `channel`
+    /// starts before this one resolves, this call's completion is dropped silently instead of
+    /// firing out of order — callers only ever see the outcome of their most recent request on
+    /// a given channel. The completion runs on the main actor.
+    static func send(_ text: String, to session: AgentSession, channel: AnyHashable,
                      completion: @escaping (Result<Void, SendError>) -> Void) {
+        let generation = beginAttempt(on: channel)
+        let guarded: (Result<Void, SendError>) -> Void = { result in
+            guard isCurrentAttempt(generation, on: channel) else { return }
+            completion(result)
+        }
+
         // Single-line prompt: strip any stray newlines so terminal delivery is clean.
         let line = text.replacingOccurrences(of: "\n", with: " ")
         let bundle = session.terminalBundleID ?? bundleID(forLabel: session.terminal)
 
         switch bundle {
         case iterm:
-            runScriptOffMain(itermScript(line), app: "iTerm2", completion: completion)
+            runScriptOffMain(itermScript(line), app: "iTerm2", completion: guarded)
         case terminal:
-            runScriptOffMain(terminalScript(line), app: "Terminal", completion: completion)
+            runScriptOffMain(terminalScript(line), app: "Terminal", completion: guarded)
         default:
-            sendViaKeystrokes(line, to: session, completion: completion)
+            sendViaKeystrokes(line, to: session, completion: guarded)
         }
     }
 
@@ -136,10 +179,10 @@ enum MessageSender {
         case .trusted:
             break
         case .prompted:
-            completion(.failure(.accessibilityDenied(askedBefore: false)))
+            completion(.failure(.accessibilityDenied(staleGrantSuspected: false)))
             return
         case .alreadyAsked:
-            completion(.failure(.accessibilityDenied(askedBefore: true)))
+            completion(.failure(.accessibilityDenied(staleGrantSuspected: AccessibilityPermission.shouldWarnStaleGrant)))
             return
         }
         // Bring the session's app forward, then type only once it is actually frontmost.

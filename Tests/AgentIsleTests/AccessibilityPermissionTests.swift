@@ -71,13 +71,31 @@ final class AccessibilityPermissionTests: XCTestCase {
     /// none when the app is already listed), and the second must not assert a stale grant as
     /// fact — the user may simply not have finished granting it.
     func testErrorMessagesDoNotOverClaim() {
-        let first = MessageSender.SendError.accessibilityDenied(askedBefore: false).userMessage
-        let again = MessageSender.SendError.accessibilityDenied(askedBefore: true).userMessage
+        let first = MessageSender.SendError.accessibilityDenied(staleGrantSuspected: false).userMessage
+        let again = MessageSender.SendError.accessibilityDenied(staleGrantSuspected: true).userMessage
         XCTAssertNotEqual(first, again)
         XCTAssertFalse(first.localizedCaseInsensitiveContains("just opened"))
         XCTAssertFalse(again.localizedCaseInsensitiveContains("still isn't active"))
         // The remove-and-re-add path is offered conditionally, not as a diagnosis.
         XCTAssertTrue(again.localizedCaseInsensitiveContains("if it already looks enabled"))
         XCTAssertTrue(again.localizedCaseInsensitiveContains("remove"))
+    }
+
+    /// Trust observed mid-streak resets it, so a later genuine loss of the grant starts from
+    /// zero rather than picking up where an old, unrelated streak left off.
+    func testDeniedStreakResetsOnTrust() {
+        XCTAssertEqual(AccessibilityPermission.nextDeniedStreak(current: 5, trusted: true), 0)
+    }
+
+    /// Each untrusted check grows the streak by one.
+    func testDeniedStreakGrowsWhileUntrusted() {
+        XCTAssertEqual(AccessibilityPermission.nextDeniedStreak(current: 2, trusted: false), 3)
+    }
+
+    /// The reported bug this streak fixes: a single `.alreadyAsked` outcome (streak 2) must
+    /// not yet warn of a stale grant — only a further repeat (streak 3) does.
+    func testWarnsStaleGrantOnlyAfterRepeatedDenials() {
+        XCTAssertFalse(AccessibilityPermission.warnsStaleGrant(streak: 2))
+        XCTAssertTrue(AccessibilityPermission.warnsStaleGrant(streak: 3))
     }
 }
