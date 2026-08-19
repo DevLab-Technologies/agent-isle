@@ -74,9 +74,13 @@ enum MessageSender {
     }
 
     /// Forget a channel's tracked attempt. Call when the channel's owner (e.g. a removed
-    /// session) can no longer act on an outcome, so `generations` doesn't grow forever.
+    /// or archived session) can no longer act on an outcome. Bumps the generation rather than
+    /// deleting the entry: a session can be archived and reactivated (or re-removed) while its
+    /// channel key is reused, and deleting would let a fresh `beginAttempt` restart from 1 —
+    /// colliding with a still in-flight, now-abandoned attempt at that same generation number,
+    /// which could then have its stale outcome misapplied as the new attempt's result.
     nonisolated static func forgetChannel(_ channel: AnyHashable) {
-        generations.withLock { $0[channel] = nil }
+        generations.withLock { $0[channel] = ($0[channel] ?? 0) + 1 }
     }
 
     /// Forget every tracked channel at once — cheaper than forgetting each individually when
