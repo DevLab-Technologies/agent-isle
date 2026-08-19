@@ -44,8 +44,32 @@ final class SessionStore: ObservableObject {
     @Published var openedMessages: [ChatMessage] = []
     /// True while the first read of an opened transcript is in flight.
     @Published var chatLoading: Bool = false
-    /// Transient error surfaced after a failed send (e.g. missing permission).
-    @Published var sendError: String?
+    /// A failed send, kept per-session (rather than on `AgentSession` itself) since the
+    /// transcript poller rewrites `lastMessage` every couple of seconds, which would wipe a
+    /// failure written there almost immediately.
+    struct SendErrorInfo {
+        let message: String
+        /// Whether the chat view should offer a button into Accessibility settings. We never
+        /// open System Settings on our own — see `AccessibilityPermission` — so this is the
+        /// user's way there.
+        let needsAccessibility: Bool
+        /// When this was reported — lets `sendError(for:)` prefer the newest failure across
+        /// kinds without a separate "most recent kind" side table to keep in sync by hand.
+        let reportedAt: Date
+    }
+    /// Transient errors surfaced after a failed send, one per (session, kind) — so a
+    /// different kind starting or completing its own attempt can never discard another
+    /// kind's still-unaddressed error; each kind only ever touches its own entry.
+    @Published private var sendErrors: [SendAttemptKey: SendErrorInfo] = [:]
+    /// The failed-send notice to show for `sessionID`, if any — read by `SessionRow`/
+    /// `SessionChatView`. Only one notice fits in the UI, so this picks the most recently
+    /// reported kind by `reportedAt`; an error not shown here isn't lost — it resurfaces once
+    /// whichever is currently shown gets cleared.
+    func sendError(for sessionID: UUID) -> SendErrorInfo? {
+        SendKind.allCases
+            .compactMap { sendErrors[SendAttemptKey(sessionID: sessionID, kind: $0)] }
+            .max { $0.reportedAt < $1.reportedAt }
+    }
 
     /// While a chat is open the panel stays pinned (won't auto-collapse on hover-out).
     var isPinned: Bool { openedSessionID != nil }
@@ -191,9 +215,23 @@ final class SessionStore: ObservableObject {
     func update(id: UUID, _ transform: (inout AgentSession) -> Void) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         var s = sessions[idx]
+        let previousStatus = s.status
         transform(&s)
         s.updatedAt = Date()
         sessions[idx] = s
+        // A session that has just wrapped up shouldn't keep showing a failed-send banner for
+        // whatever it was last trying to deliver — that attempt is moot now. Gated on a real
+        // transition INTO `.done` (not `.idle`, and not a repeat of the same status): pollers
+        // like `IdeWatcher` re-assert `.idle` on every scan tick, and unrelated actions (e.g.
+        // denying a permission prompt) also land on `.idle` — neither means "this session's
+        // send attempt is over," so clearing on those would wipe an unrelated, still-
+        // unaddressed error. Sessions that never reach `.done` (hook-free ones tracked purely
+        // by transcript activity, or ones whose parked prompt is abandoned — see
+        // `EventServer.abandon`) don't get auto-cleared here; `archive(id:)`/`remove(id:)` are
+        // the user's own way to dismiss a banner that outlives its relevance.
+        if s.status == .done && previousStatus != .done {
+            clearAllSendErrors(for: id)
+        }
         // An archived session that starts working (or needs attention) again should
         // resurface rather than stay dismissed forever.
         clearArchiveIfActive(id: id, status: s.status)
@@ -208,7 +246,20 @@ final class SessionStore: ObservableObject {
         alwaysAllowed[id] = nil
         answeredTranscriptQuestions[id] = nil
         archivedIDs.remove(id)
+        clearAllSendErrors(for: id)
         if id == openedSessionID { closeChat() }
+    }
+
+    /// Clear every outstanding send-error entry and `MessageSender` channel for `sessionID` —
+    /// the single choke point for "this session's pending sends are moot now," so `sendErrors`
+    /// and `MessageSender`'s per-channel state can't drift out of sync one call site at a time.
+    /// Called on removal, archival, and a genuine transition to `.done` (see `update(id:_:)`).
+    func clearAllSendErrors(for sessionID: UUID) {
+        for kind in SendKind.allCases {
+            let key = SendAttemptKey(sessionID: sessionID, kind: kind)
+            sendErrors[key] = nil
+            MessageSender.forgetChannel(key)
+        }
     }
 
     func clearAll() {
@@ -216,6 +267,8 @@ final class SessionStore: ObservableObject {
         bypassedSessions.removeAll()
         alwaysAllowed.removeAll()
         archivedIDs.removeAll()
+        sendErrors.removeAll()
+        MessageSender.forgetAllChannels()
         if openedSessionID != nil { closeChat() }
     }
 
@@ -223,9 +276,12 @@ final class SessionStore: ObservableObject {
 
     /// Dismiss a session from the island by hand — it drops out of `visibleSessions`
     /// immediately without waiting to age out. Most useful on a `.done` row. The session
-    /// resurfaces if it becomes active again (see `clearArchiveIfActive`).
+    /// resurfaces if it becomes active again (see `clearArchiveIfActive`), so any outstanding
+    /// send-error banner is cleared now — otherwise a stale one would resurface unchanged
+    /// alongside it, describing an attempt the user already dismissed.
     func archive(id: UUID) {
         archivedIDs.insert(id)
+        clearAllSendErrors(for: id)
         if id == openedSessionID { closeChat() }
     }
 
@@ -257,7 +313,6 @@ final class SessionStore: ObservableObject {
         // here would stick it open and defeat hover-driven auto-collapse after closing.
         openedMessages = []
         chatLoading = false
-        sendError = nil
         tailedURL = nil
         ensureTailing(session)   // flips chatLoading back on if there's a transcript to read
     }
@@ -267,7 +322,6 @@ final class SessionStore: ObservableObject {
         openedSessionID = nil
         openedMessages = []
         chatLoading = false
-        sendError = nil
         tailedURL = nil
     }
 
@@ -294,6 +348,64 @@ final class SessionStore: ObservableObject {
         tailer.start(url: url, agent: session.agent)
     }
 
+    /// Surface a failed send once, in one place: the message plus whether the chat view
+    /// should offer the Accessibility settings shortcut. Only ever touches `kind`'s own entry.
+    private func report(_ error: MessageSender.SendError, sessionID: UUID, kind: SendKind) {
+        sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] =
+            SendErrorInfo(message: error.userMessage, needsAccessibility: isAccessibilityDenied(error),
+                          reportedAt: Date())
+        SoundPlayer.shared.play(.deny)
+    }
+
+    private func isAccessibilityDenied(_ error: MessageSender.SendError) -> Bool {
+        if case .accessibilityDenied = error { return true }
+        return false
+    }
+
+    /// Dismiss `kind`'s error for `sessionID` — called before starting a new attempt of that
+    /// kind, so it can optimistically clear its own stale error without touching any other
+    /// kind's entry.
+    private func clearSendError(for sessionID: UUID, ifKind kind: SendKind) {
+        sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] = nil
+    }
+
+    /// The three independent channels that deliver text into a session's host. Two of these
+    /// names echo `AgentSession.question`/`.plan` (the per-session cards they answer), which
+    /// is intentional — `.message` has no such counterpart since chat input isn't gated by a
+    /// pending card. The echo is only a naming convenience, not an enforced link: this enum is
+    /// SessionStore's own bookkeeping for "what kind of send is in flight," kept separate from
+    /// the session model.
+    enum SendKind: Hashable, CaseIterable {
+        case message, question, plan
+    }
+
+    /// Identifies one (session, kind) send channel, passed to `MessageSender` so *it* can
+    /// guard against a stale, superseded completion — see `MessageSender.send(_:to:channel:)`.
+    /// Cancellation of an outdated in-flight send is that module's job: whoever asks it to
+    /// deliver text on a channel should get exactly one outcome, for the most recent request.
+    struct SendAttemptKey: Hashable {
+        let sessionID: UUID
+        let kind: SendKind
+    }
+
+    /// Deliver `text` into `session`'s host via `MessageSender`, on the channel identified by
+    /// `(session.id, kind)`. `onSuccess` runs only for the most recent attempt on that channel.
+    private func deliver(_ text: String, to session: AgentSession, kind: SendKind,
+                          onSuccess: (() -> Void)? = nil) {
+        let sessionID = session.id
+        clearSendError(for: sessionID, ifKind: kind)
+        let channel = SendAttemptKey(sessionID: sessionID, kind: kind)
+        MessageSender.send(text, to: session, channel: channel) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                onSuccess?()
+            case .failure(let error):
+                self.report(error, sessionID: sessionID, kind: kind)
+            }
+        }
+    }
+
     /// Deliver a typed message into the session's host.
     ///
     /// Editor extensions (VS Code / Cursor / Windsurf) render their own input and can't be
@@ -303,7 +415,10 @@ final class SessionStore: ObservableObject {
     func sendMessage(_ text: String, to session: AgentSession) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        sendError = nil
+        // Scoped to .message: the editor deep-link path below returns before `deliver` would
+        // otherwise clear it, and a message attempt must never clear a different kind's
+        // still-unaddressed error.
+        clearSendError(for: session.id, ifKind: .message)
 
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
         if let url = Jumper.editorAnswerURL(for: session, prompt: oneLine) {
@@ -312,14 +427,8 @@ final class SessionStore: ObservableObject {
             return
         }
 
-        MessageSender.send(trimmed, to: session) { [weak self] result in
-            switch result {
-            case .success:
-                SoundPlayer.shared.play(.select)
-            case .failure(let error):
-                self?.sendError = error.userMessage
-                SoundPlayer.shared.play(.deny)
-            }
+        deliver(trimmed, to: session, kind: .message) {
+            SoundPlayer.shared.play(.select)
         }
     }
 
@@ -409,15 +518,10 @@ final class SessionStore: ObservableObject {
         }
         SoundPlayer.shared.play(.select)
         if viaTranscript, let session {
-            sendError = nil
             // Deliver the flattened one-line form (MessageSender flattens too, but keep
             // what we typed identical to what we recorded as the session's last message).
-            MessageSender.send(oneLine, to: session) { [weak self] result in
-                if case .failure(let error) = result {
-                    self?.sendError = error.userMessage
-                    SoundPlayer.shared.play(.deny)
-                }
-            }
+            // `deliver` clears this session's .question error itself before attempting.
+            deliver(oneLine, to: session, kind: .question)
         } else {
             EventServer.shared?.reply(sessionID: sessionID, decision: trimmed)
         }
@@ -460,14 +564,9 @@ final class SessionStore: ObservableObject {
         SoundPlayer.shared.play(hasFeedback ? .select : .approve)
 
         if viaTranscript, let session {
-            sendError = nil
+            // `deliver` clears this session's .plan error itself before attempting.
             let text = hasFeedback ? oneLine : "Approved — proceed with the plan."
-            MessageSender.send(text, to: session) { [weak self] result in
-                if case .failure(let error) = result {
-                    self?.sendError = error.userMessage
-                    SoundPlayer.shared.play(.deny)
-                }
-            }
+            deliver(text, to: session, kind: .plan)
         } else {
             // "approve" is the sentinel the hook maps to allow; anything else is feedback
             // that denies ExitPlanMode with the text as the reason so the agent revises.

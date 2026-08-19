@@ -52,6 +52,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             InstallLocation.offerToRelocateIfNeeded()
         }
 
+        // If Accessibility is already granted, forget any earlier ask so a future genuine
+        // loss of the grant (app update, re-signing) can still prompt once. Sessions on the
+        // AppleScript path never run the check that would otherwise clear it.
+        AccessibilityPermission.forgetAskIfTrusted()
+
         // Floating island over the notch. Suppressed in settings-capture mode so it
         // doesn't float over the settings window during a screenshot. Actual visibility is
         // decided by `applyDisplayMode()` once the launch overrides below are known.

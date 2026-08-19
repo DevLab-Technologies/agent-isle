@@ -274,6 +274,24 @@ final class AppSettings: ObservableObject {
         set { d.set(newValue, forKey: Key.relocationPromptSuppressed) }
     }
 
+    /// Set once macOS has been asked to show its Accessibility prompt, so we never re-open
+    /// System Settings on later send attempts (see `AccessibilityPermission`). Cleared again
+    /// as soon as the app is observed to be trusted.
+    var accessibilityPromptShown: Bool {
+        get { d.bool(forKey: Key.accessibilityPromptShown) }
+        set { d.set(newValue, forKey: Key.accessibilityPromptShown) }
+    }
+
+    /// Consecutive `AccessibilityPermission.check()` calls that found the app untrusted since
+    /// trust was last observed. `accessibilityPromptShown` has to flip the moment we ask (so we
+    /// never re-open System Settings), but a single `.prompted` outcome doesn't guarantee macOS
+    /// actually showed a dialog — so the harsher "this might be a stale grant" wording waits for
+    /// this streak to build up rather than firing on the very next attempt.
+    var accessibilityDeniedStreak: Int {
+        get { d.integer(forKey: Key.accessibilityDeniedStreak) }
+        set { d.set(newValue, forKey: Key.accessibilityDeniedStreak) }
+    }
+
     // MARK: Session card
     @Published var showTokens: Bool { didSet { d.set(showTokens, forKey: Key.showTokens) } }
     @Published var showTerminal: Bool { didSet { d.set(showTerminal, forKey: Key.showTerminal) } }
@@ -348,6 +366,8 @@ final class AppSettings: ObservableObject {
         static let autoSetupIntegrations = "autoSetupIntegrations"
         static let integrationSetupDone = "integrationSetupDone"
         static let relocationPromptSuppressed = "relocationPromptSuppressed"
+        static let accessibilityPromptShown = "accessibilityPromptShown"
+        static let accessibilityDeniedStreak = "accessibilityDeniedStreak"
         static let showTokens = "showTokens"
         static let showTerminal = "showTerminal"
         static let showTasks = "showTasks"

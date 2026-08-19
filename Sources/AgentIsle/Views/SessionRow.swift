@@ -30,6 +30,12 @@ struct SessionRow: View {
                 PlanReviewCard(session: session, plan: plan)
                     .id(plan)
             }
+            // A send started from a card here has no input bar to report under, so the
+            // failure lands on the card itself.
+            if let err = store.sendError(for: session.id) {
+                SendErrorNotice(message: err.message,
+                                showsAccessibilityButton: err.needsAccessibility)
+            }
         }
         .padding(Theme.Space.lg)
         .background(

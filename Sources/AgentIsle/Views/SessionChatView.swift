@@ -118,11 +118,9 @@ struct SessionChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 4) {
-            if let err = store.sendError {
-                Text(err)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(Palette.deny)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if let err = store.sendError(for: session.id) {
+                SendErrorNotice(message: err.message,
+                                showsAccessibilityButton: err.needsAccessibility)
                     .padding(.horizontal, 12)
             }
             HStack(spacing: 8) {

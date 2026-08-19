@@ -1,5 +1,5 @@
 import AppKit
-import ApplicationServices
+import os
 
 /// Delivers a typed message into a running agent session's terminal.
 ///
@@ -11,7 +11,12 @@ import ApplicationServices
 @MainActor
 enum MessageSender {
     enum SendError: Error {
-        case accessibilityDenied
+        /// Not trusted for Accessibility. `staleGrantSuspected` is NOT "macOS was already
+        /// asked" — a single ask doesn't prove a dialog ever appeared (see
+        /// `AccessibilityPermission.Outcome.prompted`) — it's true once repeated denials
+        /// (`AccessibilityPermission.shouldWarnStaleGrant`) make a stale grant likely enough
+        /// to suggest removing and re-adding the app.
+        case accessibilityDenied(staleGrantSuspected: Bool)
         case automationDenied(String)
         case couldNotFocus(String)
         case scriptFailed(String)
@@ -19,8 +24,13 @@ enum MessageSender {
         /// A short, user-facing explanation shown under the input bar.
         var userMessage: String {
             switch self {
-            case .accessibilityDenied:
-                return "Grant Accessibility to Agent Isle in System Settings › Privacy. If it already looks enabled, remove it there, re-add this copy, and relaunch."
+            case .accessibilityDenied(let staleGrantSuspected):
+                // Neither message claims more than we know: macOS shows no prompt at all when
+                // the app is already listed under Accessibility, and a still-untrusted second
+                // attempt may just mean the user hasn't finished granting it yet.
+                return staleGrantSuspected
+                    ? "Still no Accessibility permission for Agent Isle. Turn it on in Accessibility settings — if it already looks enabled, this isn't the copy that was granted, so remove Agent Isle there, add this one back, and relaunch."
+                    : "Agent Isle needs Accessibility permission to type into your session. Turn it on in Accessibility settings, then send again."
             case .automationDenied(let app):
                 return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
             case .couldNotFocus(let app):
@@ -35,20 +45,75 @@ enum MessageSender {
     private static let iterm = "com.googlecode.iterm2"
     private static let terminal = "com.apple.Terminal"
 
-    /// Send `text` into `session`. The completion runs on the main actor.
-    static func send(_ text: String, to session: AgentSession,
+    // MARK: - Stale-completion guarding
+
+    /// Per-channel counter guarding against a stale, slow-to-complete send (e.g. the keystroke
+    /// path's frontmost-app poll in `waitUntilFrontmost`, which can take up to 1.5s) actually
+    /// running its side effect — or reporting its outcome — after a *later* send on the same
+    /// channel has already resolved. A plain `@MainActor`-isolated dictionary isn't enough: the
+    /// AppleScript path checks currency from a background queue (see `runScriptOffMain`), right
+    /// before actually running the script, not just around the completion — the guard has to
+    /// stop the *side effect*, not merely filter which outcome gets reported, or two overlapping
+    /// sends on the same channel could both actually type/script into the terminal with only the
+    /// newer one's result ever shown. `OSAllocatedUnfairLock` makes the store itself genuinely
+    /// `Sendable`, so the functions below need no actor isolation and are safe to call from any
+    /// thread (a caller only needs a `Hashable` value that names the channel — e.g. a
+    /// per-session, per-purpose key — not its own generation bookkeeping).
+    nonisolated private static let generations = OSAllocatedUnfairLock<[AnyHashable: Int]>(initialState: [:])
+
+    nonisolated static func beginAttempt(on channel: AnyHashable) -> Int {
+        generations.withLock { values in
+            let next = (values[channel] ?? 0) + 1
+            values[channel] = next
+            return next
+        }
+    }
+
+    nonisolated static func isCurrentAttempt(_ generation: Int, on channel: AnyHashable) -> Bool {
+        generations.withLock { $0[channel] == generation }
+    }
+
+    /// Forget a channel's tracked attempt. Call when the channel's owner (e.g. a removed
+    /// session) can no longer act on an outcome, so `generations` doesn't grow forever.
+    nonisolated static func forgetChannel(_ channel: AnyHashable) {
+        generations.withLock { $0[channel] = nil }
+    }
+
+    /// Forget every tracked channel at once — cheaper than forgetting each individually when
+    /// all owning state is being reset together (e.g. `SessionStore.clearAll()`).
+    nonisolated static func forgetAllChannels() {
+        generations.withLock { $0.removeAll() }
+    }
+
+    /// Send `text` into `session` on `channel`. If a later `send` call on the same `channel`
+    /// starts before this one resolves, this call's completion is dropped as soon as that's
+    /// detected — before its side effect (typing, or running the AppleScript) runs if it
+    /// hasn't started yet, so callers only ever see the outcome of their most recent request
+    /// on a given channel. This can't reach back into a side effect already in progress
+    /// (AppleScript execution in particular has no cancellation), so a resend that lands while
+    /// the previous one is still actively delivering can still have both reach the terminal —
+    /// see `runScriptOffMain`. The completion runs on the main actor.
+    static func send(_ text: String, to session: AgentSession, channel: AnyHashable,
                      completion: @escaping (Result<Void, SendError>) -> Void) {
+        let generation = beginAttempt(on: channel)
+        let guarded: (Result<Void, SendError>) -> Void = { result in
+            guard isCurrentAttempt(generation, on: channel) else { return }
+            completion(result)
+        }
+
         // Single-line prompt: strip any stray newlines so terminal delivery is clean.
         let line = text.replacingOccurrences(of: "\n", with: " ")
         let bundle = session.terminalBundleID ?? bundleID(forLabel: session.terminal)
 
         switch bundle {
         case iterm:
-            runScriptOffMain(itermScript(line), app: "iTerm2", completion: completion)
+            runScriptOffMain(itermScript(line), app: "iTerm2", generation: generation, channel: channel,
+                             completion: guarded)
         case terminal:
-            runScriptOffMain(terminalScript(line), app: "Terminal", completion: completion)
+            runScriptOffMain(terminalScript(line), app: "Terminal", generation: generation, channel: channel,
+                             completion: guarded)
         default:
-            sendViaKeystrokes(line, to: session, completion: completion)
+            sendViaKeystrokes(line, to: session, generation: generation, channel: channel, completion: guarded)
         }
     }
 
@@ -60,9 +125,16 @@ enum MessageSender {
     /// so running it on the main thread would freeze the whole UI (and with it the Quit
     /// menu, leaving no way to exit this accessory app). Off-main, the UI stays responsive.
     nonisolated private static func runScriptOffMain(
-        _ source: String, app: String,
+        _ source: String, app: String, generation: Int, channel: AnyHashable,
         completion: @escaping (Result<Void, SendError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
+            // Re-check right before the script actually runs, not just before reporting the
+            // result, so a superseded attempt that hasn't started yet is skipped entirely.
+            // This can't help an attempt that's already mid-`executeAndReturnError` by the
+            // time it's superseded — AppleScript gives us no way to cancel a running call —
+            // so a resend that lands while the previous one is still blocked (e.g. on the
+            // one-time Automation permission prompt) can still have both land in the terminal.
+            guard isCurrentAttempt(generation, on: channel) else { return }
             let result = runAppleScript(source, app: app)
             DispatchQueue.main.async { completion(result) }
         }
@@ -123,9 +195,22 @@ enum MessageSender {
     // MARK: - Keystroke fallback
 
     private static func sendViaKeystrokes(_ text: String, to session: AgentSession,
+                                          generation: Int, channel: AnyHashable,
                                           completion: @escaping (Result<Void, SendError>) -> Void) {
-        guard ensureAccessibility() else {
-            completion(.failure(.accessibilityDenied))
+        // No currency guard before this point: `send()` calls `beginAttempt` and dispatches
+        // here synchronously on the main actor, with no suspension point in between, so this
+        // attempt is always current when it starts — a guard here could never observe
+        // otherwise as the code is structured today. `waitUntilFrontmost`'s completion below
+        // is the first point where real time has actually passed, so that's where the
+        // meaningful re-check belongs.
+        switch AccessibilityPermission.check() {
+        case .trusted:
+            break
+        case .prompted:
+            completion(.failure(.accessibilityDenied(staleGrantSuspected: false)))
+            return
+        case .alreadyAsked:
+            completion(.failure(.accessibilityDenied(staleGrantSuspected: AccessibilityPermission.shouldWarnStaleGrant)))
             return
         }
         // Bring the session's app forward, then type only once it is actually frontmost.
@@ -135,6 +220,9 @@ enum MessageSender {
         // Waiting for real focus, and failing if it never comes, keeps "sent" honest.
         Jumper.jump(to: session)
         waitUntilFrontmost(Jumper.targetBundleID(for: session)) { focused in
+            // Re-check right before actually typing, not just before reporting the result: a
+            // superseded attempt must not touch the terminal at all (see `generations`).
+            guard isCurrentAttempt(generation, on: channel) else { return }
             guard focused else {
                 completion(.failure(.couldNotFocus(session.terminal)))
                 return
@@ -168,15 +256,6 @@ enum MessageSender {
             }
         }
         poll()
-    }
-
-    /// Returns true if we may post synthetic events; otherwise triggers the one-time
-    /// system prompt so the user can grant access.
-    private static func ensureAccessibility() -> Bool {
-        if AXIsProcessTrusted() { return true }
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-        return false
     }
 
     /// Maximum UTF-16 units per synthesized event. A single event carrying a long
