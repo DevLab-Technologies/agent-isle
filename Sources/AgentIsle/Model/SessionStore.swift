@@ -58,11 +58,18 @@ final class SessionStore: ObservableObject {
     /// different kind starting or completing its own attempt can never discard another
     /// kind's still-unaddressed error; each kind only ever touches its own entry.
     @Published private var sendErrors: [SendAttemptKey: SendErrorInfo] = [:]
+    /// The kind `report(_:sessionID:kind:)` most recently wrote for a session, so
+    /// `sendError(for:)` can prefer the newest failure instead of an arbitrary fixed order.
+    private var mostRecentSendErrorKind: [UUID: SendKind] = [:]
     /// The failed-send notice to show for `sessionID`, if any — read by `SessionRow`/
-    /// `SessionChatView`. Only one notice fits in the UI, so when more than one kind has an
-    /// outstanding error this prefers `SendKind`'s declaration order; an error not shown here
-    /// isn't lost — it resurfaces once whichever is currently shown gets cleared.
+    /// `SessionChatView`. Only one notice fits in the UI, so this prefers the most recently
+    /// reported kind; an error not shown here isn't lost — it resurfaces once whichever is
+    /// currently shown gets cleared.
     func sendError(for sessionID: UUID) -> SendErrorInfo? {
+        if let mostRecent = mostRecentSendErrorKind[sessionID],
+           let info = sendErrors[SendAttemptKey(sessionID: sessionID, kind: mostRecent)] {
+            return info
+        }
         for kind in SendKind.allCases {
             if let info = sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] {
                 return info
@@ -215,15 +222,25 @@ final class SessionStore: ObservableObject {
     func update(id: UUID, _ transform: (inout AgentSession) -> Void) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         var s = sessions[idx]
+        let previousStatus = s.status
         transform(&s)
         s.updatedAt = Date()
         sessions[idx] = s
-        // A session that has wrapped up on its own shouldn't keep showing a failed-send
-        // banner for whatever it was last trying to deliver — that attempt is moot now.
-        if s.status == .done || s.status == .idle {
+        // A session that has just wrapped up shouldn't keep showing a failed-send banner for
+        // whatever it was last trying to deliver — that attempt is moot now. Gated on a real
+        // transition INTO `.done` (not `.idle`, and not a repeat of the same status): pollers
+        // like `IdeWatcher` re-assert `.idle` on every scan tick, and unrelated actions (e.g.
+        // denying a permission prompt) also land on `.idle` — neither means "this session's
+        // send attempt is over," so clearing on those would wipe an unrelated, still-
+        // unaddressed error. Also forgets the `MessageSender` channel (not just the
+        // `sendErrors` entry) so a send still in flight can't resurrect it once it completes.
+        if s.status == .done && previousStatus != .done {
             for kind in SendKind.allCases {
-                sendErrors[SendAttemptKey(sessionID: id, kind: kind)] = nil
+                let key = SendAttemptKey(sessionID: id, kind: kind)
+                sendErrors[key] = nil
+                MessageSender.forgetChannel(key)
             }
+            mostRecentSendErrorKind[id] = nil
         }
         // An archived session that starts working (or needs attention) again should
         // resurface rather than stay dismissed forever.
@@ -244,6 +261,7 @@ final class SessionStore: ObservableObject {
             sendErrors[key] = nil
             MessageSender.forgetChannel(key)
         }
+        mostRecentSendErrorKind[id] = nil
         if id == openedSessionID { closeChat() }
     }
 
@@ -253,6 +271,7 @@ final class SessionStore: ObservableObject {
         alwaysAllowed.removeAll()
         archivedIDs.removeAll()
         sendErrors.removeAll()
+        mostRecentSendErrorKind.removeAll()
         MessageSender.forgetAllChannels()
         if openedSessionID != nil { closeChat() }
     }
@@ -335,6 +354,7 @@ final class SessionStore: ObservableObject {
     private func report(_ error: MessageSender.SendError, sessionID: UUID, kind: SendKind) {
         sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] =
             SendErrorInfo(message: error.userMessage, needsAccessibility: isAccessibilityDenied(error))
+        mostRecentSendErrorKind[sessionID] = kind
         SoundPlayer.shared.play(.deny)
     }
 
@@ -348,6 +368,9 @@ final class SessionStore: ObservableObject {
     /// kind's entry.
     private func clearSendError(for sessionID: UUID, ifKind kind: SendKind) {
         sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] = nil
+        if mostRecentSendErrorKind[sessionID] == kind {
+            mostRecentSendErrorKind[sessionID] = nil
+        }
     }
 
     /// The three independent channels that deliver text into a session's host. Two of these

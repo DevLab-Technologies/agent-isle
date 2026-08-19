@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// Delivers a typed message into a running agent session's terminal.
 ///
@@ -46,67 +47,42 @@ enum MessageSender {
 
     // MARK: - Stale-completion guarding
 
-    /// Thread-safe backing store for the per-channel generation counters. A plain
-    /// `@MainActor`-isolated dictionary isn't enough: the AppleScript path checks currency from
-    /// a background queue (see `runAppleScript`), right before actually running the script, not
-    /// just around the completion — the guard has to stop the *side effect*, not merely filter
-    /// which outcome gets reported, or two overlapping sends on the same channel can both
-    /// actually type/script into the terminal with only the newer one's result ever shown.
-    private final class GenerationStore: @unchecked Sendable {
-        private let lock = NSLock()
-        private var values: [AnyHashable: Int] = [:]
+    /// Per-channel counter guarding against a stale, slow-to-complete send (e.g. the keystroke
+    /// path's frontmost-app poll in `waitUntilFrontmost`, which can take up to 1.5s) actually
+    /// running its side effect — or reporting its outcome — after a *later* send on the same
+    /// channel has already resolved. A plain `@MainActor`-isolated dictionary isn't enough: the
+    /// AppleScript path checks currency from a background queue (see `runScriptOffMain`), right
+    /// before actually running the script, not just around the completion — the guard has to
+    /// stop the *side effect*, not merely filter which outcome gets reported, or two overlapping
+    /// sends on the same channel could both actually type/script into the terminal with only the
+    /// newer one's result ever shown. `OSAllocatedUnfairLock` makes the store itself genuinely
+    /// `Sendable`, so the functions below need no actor isolation and are safe to call from any
+    /// thread (a caller only needs a `Hashable` value that names the channel — e.g. a
+    /// per-session, per-purpose key — not its own generation bookkeeping).
+    nonisolated private static let generations = OSAllocatedUnfairLock<[AnyHashable: Int]>(initialState: [:])
 
-        func begin(_ channel: AnyHashable) -> Int {
-            lock.lock(); defer { lock.unlock() }
+    nonisolated static func beginAttempt(on channel: AnyHashable) -> Int {
+        generations.withLock { values in
             let next = (values[channel] ?? 0) + 1
             values[channel] = next
             return next
         }
-
-        func isCurrent(_ generation: Int, on channel: AnyHashable) -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            return values[channel] == generation
-        }
-
-        func forget(_ channel: AnyHashable) {
-            lock.lock(); defer { lock.unlock() }
-            values[channel] = nil
-        }
-
-        func forgetAll() {
-            lock.lock(); defer { lock.unlock() }
-            values.removeAll()
-        }
     }
 
-    /// Per-channel counter guarding against a stale, slow-to-complete send (e.g. the keystroke
-    /// path's frontmost-app poll in `waitUntilFrontmost`, which can take up to 1.5s) actually
-    /// running its side effect — or reporting its outcome — after a *later* send on the same
-    /// channel has already resolved. Owned here, not by callers: "exactly one outcome per
-    /// channel, most-recent-wins" is this module's own delivery contract, not something every
-    /// caller should have to re-implement for each new channel it invents (a caller only needs
-    /// a `Hashable` value that names the channel — e.g. a per-session, per-purpose key — not
-    /// its own generation bookkeeping).
-    private static let generations = GenerationStore()
-
-    static func beginAttempt(on channel: AnyHashable) -> Int {
-        generations.begin(channel)
-    }
-
-    static func isCurrentAttempt(_ generation: Int, on channel: AnyHashable) -> Bool {
-        generations.isCurrent(generation, on: channel)
+    nonisolated static func isCurrentAttempt(_ generation: Int, on channel: AnyHashable) -> Bool {
+        generations.withLock { $0[channel] == generation }
     }
 
     /// Forget a channel's tracked attempt. Call when the channel's owner (e.g. a removed
     /// session) can no longer act on an outcome, so `generations` doesn't grow forever.
-    static func forgetChannel(_ channel: AnyHashable) {
-        generations.forget(channel)
+    nonisolated static func forgetChannel(_ channel: AnyHashable) {
+        generations.withLock { $0[channel] = nil }
     }
 
     /// Forget every tracked channel at once — cheaper than forgetting each individually when
     /// all owning state is being reset together (e.g. `SessionStore.clearAll()`).
-    static func forgetAllChannels() {
-        generations.forgetAll()
+    nonisolated static func forgetAllChannels() {
+        generations.withLock { $0.removeAll() }
     }
 
     /// Send `text` into `session` on `channel`. If a later `send` call on the same `channel`
@@ -152,7 +128,7 @@ enum MessageSender {
         DispatchQueue.global(qos: .userInitiated).async {
             // Re-check right before the script actually runs, not just before reporting the
             // result: a superseded attempt must not touch the terminal at all.
-            guard generations.isCurrent(generation, on: channel) else { return }
+            guard isCurrentAttempt(generation, on: channel) else { return }
             let result = runAppleScript(source, app: app)
             DispatchQueue.main.async { completion(result) }
         }
@@ -215,6 +191,11 @@ enum MessageSender {
     private static func sendViaKeystrokes(_ text: String, to session: AgentSession,
                                           generation: Int, channel: AnyHashable,
                                           completion: @escaping (Result<Void, SendError>) -> Void) {
+        // Guard before any side effect at all, not just before typing: AccessibilityPermission
+        // .check() and Jumper.jump(to:) below have their own real effects (persisted streak
+        // state, a possible System Settings prompt, stealing focus) that a superseded attempt
+        // must not trigger either.
+        guard isCurrentAttempt(generation, on: channel) else { return }
         switch AccessibilityPermission.check() {
         case .trusted:
             break

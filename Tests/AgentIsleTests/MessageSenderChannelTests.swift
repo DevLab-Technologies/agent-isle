@@ -47,4 +47,19 @@ final class MessageSenderChannelTests: XCTestCase {
         XCTAssertFalse(MessageSender.isCurrentAttempt(generationA, on: channelA))
         XCTAssertFalse(MessageSender.isCurrentAttempt(generationB, on: channelB))
     }
+
+    /// The actual scenario the lock-protected store exists for: `runScriptOffMain` reads
+    /// currency from a background queue while the main actor can be starting new attempts at
+    /// the same time. `beginAttempt`/`isCurrentAttempt` are `nonisolated` specifically so this
+    /// is callable — and safe — off the main actor; a data race here would corrupt the count
+    /// (lost increments) rather than merely produce a wrong-but-consistent answer.
+    func testConcurrentAttemptsFromMultipleThreadsLoseNoUpdates() {
+        let channel = UUID()
+        let iterations = 2_000
+        DispatchQueue.concurrentPerform(iterations: iterations) { _ in
+            _ = MessageSender.beginAttempt(on: channel)
+        }
+        let final = MessageSender.beginAttempt(on: channel)
+        XCTAssertEqual(final, iterations + 1)
+    }
 }
