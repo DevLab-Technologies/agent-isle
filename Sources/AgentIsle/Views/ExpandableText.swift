@@ -50,6 +50,10 @@ struct ExpandableText: View {
         .help(text)
         .contentShape(Rectangle())
         .onTapGesture { if showsToggle { expanded.toggle() } }
+        // A superseding request can hand a reused view a different string (SessionRow
+        // doesn't key every card on its payload), and a stale `expanded` would leave a
+        // Show-less toggle on text that isn't truncated at all.
+        .onChange(of: text) { _, _ in expanded = false }
     }
 
     private var toggle: some View {
