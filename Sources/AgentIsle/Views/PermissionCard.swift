@@ -30,10 +30,13 @@ struct PermissionCard: View {
                     .lineLimit(1)
             }
             if let command = request.command {
-                Text("$ \(command)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(SessionStatus.done.color.opacity(0.85))
-                    .lineLimit(2)
+                // Approving a command you can only half-read is guesswork, so the tail is
+                // reachable rather than ellipsed away.
+                ExpandableText(text: "$ \(command)",
+                               font: .system(size: 10, design: .monospaced),
+                               color: SessionStatus.done.color.opacity(0.85),
+                               accent: SessionStatus.waiting.color,
+                               collapsedLineLimit: 3)
             }
 
             if !request.previewLines.isEmpty {
@@ -201,6 +204,14 @@ struct QuestionCard: View {
     /// only show the number badges when the shortcuts are actually live.
     private var shortcutsEnabled: Bool { store.focusSession?.id == session.id }
 
+    /// Card title. A lone part lends its own header ("Auth method"), which is more use
+    /// than a generic word; with several parts the label counts them instead.
+    private var headerTitle: String {
+        guard question.parts.count == 1 else { return "QUESTIONS" }
+        let header = question.parts[0].header.trimmingCharacters(in: .whitespacesAndNewlines)
+        return header.isEmpty ? "QUESTION" : header.uppercased()
+    }
+
     /// Running 0-based option offset for a part, so options are numbered ⌘1…⌘9 in order
     /// across every part of the ask.
     private func optionOffset(before part: QuestionPart) -> Int {
@@ -218,10 +229,13 @@ struct QuestionCard: View {
                 Image(systemName: "questionmark.circle.fill")
                     .font(.system(size: 10))
                     .foregroundStyle(accent)
-                Text(question.parts.count == 1 ? question.parts[0].prompt : "Questions")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(2)
+                // The header row is a label, never the question itself: squeezed beside
+                // the icon and badge it could only ever show a clipped fragment. The
+                // prompt gets the card's full width in `partSection` instead.
+                Text(headerTitle)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent.opacity(0.9))
+                    .lineLimit(1)
                 if question.parts.count > 1 {
                     Spacer(minLength: 4)
                     Text("\(question.parts.count)")
@@ -269,18 +283,18 @@ struct QuestionCard: View {
     @ViewBuilder
     private func partSection(_ part: QuestionPart) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            // For a single part the prompt is already in the header row above.
-            if question.parts.count > 1 {
-                if !part.header.isEmpty {
-                    Text(part.header.uppercased())
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(accent.opacity(0.9))
-                }
-                Text(part.prompt)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(3)
+            // A single part's header is already the card's title row; with several parts
+            // each one needs its own label to stay attached to its options.
+            if question.parts.count > 1, !part.header.isEmpty {
+                Text(part.header.uppercased())
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent.opacity(0.9))
             }
+            ExpandableText(text: part.prompt,
+                           font: .system(size: 11, weight: .medium, design: .monospaced),
+                           color: .white.opacity(0.9),
+                           accent: accent,
+                           collapsedLineLimit: question.parts.count == 1 ? 6 : 4)
             let base = optionOffset(before: part)
             ForEach(Array(part.options.enumerated()), id: \.offset) { idx, option in
                 optionRow(part: part, idx: idx, option: option, number: base + idx + 1)
@@ -299,9 +313,14 @@ struct QuestionCard: View {
         } label: {
             HStack(spacing: 8) {
                 selectionIcon(part: part, isSelected: isSelected)
+                // Options wrap rather than truncate — picking between two answers you can
+                // only read the start of is the same guessing game as a clipped question.
                 Text(option)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    .help(option)
                 Spacer(minLength: 0)
                 if showBadge {
                     Text("⌘\(number)")
