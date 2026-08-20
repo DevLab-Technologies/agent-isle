@@ -47,6 +47,15 @@ final class Updater: ObservableObject {
         URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30")!
     static let releasesPage =
         URL(string: "https://github.com/\(repo)/releases/latest")!
+    /// Developer ID Team ID that signs official GitHub releases
+    /// (`AHMED ELKHAYYAT (ZS3A435WC2)`). Change only if the Apple team changes;
+    /// auto-update must not accept another signer without an explicit commit.
+    nonisolated static let expectedTeamID = "ZS3A435WC2"
+    /// `codesign -R=` requirement: Apple generic anchor + this team's OU.
+    /// `--verify --strict` alone accepts ad-hoc signatures; this does not.
+    nonisolated static var codesignRequirement: String {
+        "anchor apple generic and certificate leaf[subject.OU] = \(expectedTeamID)"
+    }
 
     private let autoInstallKey = "autoInstallUpdates"
     private let skippedKey = "skippedUpdateVersion"
@@ -301,6 +310,11 @@ final class Updater: ObservableObject {
                   let newApp = Self.firstApp(in: unzipDir)
             else { throw UpdateError.unpackFailed }
 
+            // Refuse unsigned / differently-team-signed bundles. A compromised GitHub
+            // release must not auto-install: the candidate has to satisfy the pinned
+            // Developer ID Team ID, not merely pass a structural codesign verify.
+            try await Self.verifyUpdateCandidate(newApp)
+
             // Hand the swap+relaunch to a detached helper: it waits for us to quit,
             // replaces the bundle (with rollback on failure), then reopens the app.
             // The helper reads from workDir after we exit, so we don't remove it here.
@@ -334,8 +348,27 @@ final class Updater: ObservableObject {
             .first { $0.pathExtension == "app" }
     }
 
+    // MARK: - Signature gate
+
+    /// Verify `candidate` is signed by the official Developer ID team.
+    /// `--verify --strict` is not enough: it accepts ad-hoc signatures. The `-R=`
+    /// requirement is what rejects unsigned, ad-hoc, and other-team bundles.
+    nonisolated static func verifyUpdateCandidate(_ candidate: URL) async throws {
+        let status = await run("/usr/bin/codesign", [
+            "--verify", "--strict",
+            "-R=\(codesignRequirement)",
+            candidate.path,
+        ])
+        guard status == 0 else { throw UpdateError.invalidSignature }
+    }
+
     /// Spawn a detached shell helper that waits for this process to exit, swaps the
     /// bundle in place (restoring the backup if the copy fails), then relaunches.
+    ///
+    /// Quarantine is only cleared after the candidate already passed
+    /// `verifyUpdateCandidate` — never as a substitute for signature checks.
+    /// The helper re-runs the same codesign requirement immediately before `ditto`
+    /// so a same-user swap of the temp bundle after we quit cannot land.
     nonisolated private static func installAndRelaunch(newApp: URL, dest: URL) throws {
         let pid = ProcessInfo.processInfo.processIdentifier
         let script = """
@@ -343,8 +376,15 @@ final class Updater: ObservableObject {
         APP_PID=\(pid)
         SRC=\(shellQuote(newApp.path))
         DEST=\(shellQuote(dest.path))
+        REQ=\(shellQuote(codesignRequirement))
         BACKUP="${DEST}.old-$$"
         while /bin/kill -0 "$APP_PID" 2>/dev/null; do /bin/sleep 0.2; done
+        # Re-check after this process has exited: the Swift-side verify is otherwise
+        # a TOCTOU against anything that can write the temp bundle.
+        if ! /usr/bin/codesign --verify --strict -R="$REQ" "$SRC"; then
+          /usr/bin/open "$DEST"
+          exit 1
+        fi
         # Only swap if we can safely move the current bundle aside first; otherwise
         # leave it untouched (a failed update must never delete the installed app).
         if /bin/mv "$DEST" "$BACKUP"; then
@@ -405,4 +445,7 @@ final class Updater: ObservableObject {
     }
 }
 
-private enum UpdateError: Error { case unpackFailed }
+enum UpdateError: Error, Equatable {
+    case unpackFailed
+    case invalidSignature
+}
