@@ -265,7 +265,7 @@ struct GenericHookInstaller {
             return false
         }
         do {
-            try fm.createDirectory(at: Self.installDir, withIntermediateDirectories: true)
+            try EventAuthToken.ensurePrivateDirectory(Self.installDir)
             if fm.fileExists(atPath: installedScriptURL.path) { try? fm.removeItem(at: installedScriptURL) }
             try fm.copyItem(at: bundled, to: installedScriptURL)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installedScriptURL.path)

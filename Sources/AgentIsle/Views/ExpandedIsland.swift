@@ -216,8 +216,10 @@ struct ExpandedIsland: View {
     /// Put the curl one-liner agents can POST events to on the pasteboard (mirrors the
     /// menu-bar item's old "Copy Hook Command").
     private func copyHookCommand() {
+        let token = EventAuthToken.loadOrCreate()
         let cmd = "curl -s -X POST http://localhost:\(EventServer.port)/event " +
-                  "-H 'Content-Type: application/json' -d @-"
+                  "-H 'Content-Type: application/json' " +
+                  "-H 'X-Agent-Isle-Token: \(token)' -d @-"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cmd, forType: .string)
     }

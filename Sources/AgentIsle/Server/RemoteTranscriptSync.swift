@@ -59,8 +59,9 @@ final class RemoteTranscriptSync {
     private let cacheDir: URL
 
     init() {
-        cacheDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".agent-isle/remote-transcripts")
+        let parent = EventAuthToken.directoryURL
+        try? EventAuthToken.ensurePrivateDirectory(parent)
+        cacheDir = parent.appendingPathComponent("remote-transcripts")
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
 
@@ -286,9 +287,8 @@ final class RemoteTranscriptSync {
 
     /// `%C` is a hash of host/port/user, so each destination gets its own socket.
     nonisolated private static var controlPath: String {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".agent-isle")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = EventAuthToken.directoryURL
+        try? EventAuthToken.ensurePrivateDirectory(dir)
         return dir.appendingPathComponent("ssh-%C").path
     }
 
