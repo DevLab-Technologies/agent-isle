@@ -51,4 +51,51 @@ final class UpdateChannelTests: XCTestCase {
         XCTAssertEqual(r("v1.2.0").cleanVersion, "1.2.0")
         XCTAssertEqual(r("1.2.0").cleanVersion, "1.2.0")
     }
+
+    // MARK: - Signature gate
+
+    func testVerifyRejectsUnsignedPath() async {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-isle-unsigned-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        do {
+            try await Updater.verifyUpdateCandidate(dir)
+            XCTFail("unsigned path should fail the signature gate")
+        } catch UpdateError.invalidSignature {
+            // expected
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+    }
+
+    func testVerifyRejectsAdHocBundle() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-isle-adhoc-\(UUID().uuidString)")
+        let app = root.appendingPathComponent("Evil.app")
+        let macOS = app.appendingPathComponent("Contents/MacOS")
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let exe = macOS.appendingPathComponent("Evil")
+        try Data("#!/bin/sh\n".utf8).write(to: exe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exe.path)
+
+        let sign = Process()
+        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        sign.arguments = ["--force", "--sign", "-", app.path]
+        try sign.run()
+        sign.waitUntilExit()
+        XCTAssertEqual(sign.terminationStatus, 0, "ad-hoc codesign should succeed")
+
+        do {
+            try await Updater.verifyUpdateCandidate(app)
+            XCTFail("ad-hoc bundle must not pass the pinned Team ID requirement")
+        } catch UpdateError.invalidSignature {
+            // expected — this is the #42 attack (compromised zip, ad-hoc signed)
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+    }
 }
