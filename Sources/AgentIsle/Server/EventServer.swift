@@ -206,6 +206,9 @@ final class EventServer {
 
         case "question":
             let q = Self.question(from: event)
+            // A brand-new question supersedes whatever the prior one's send attempt left
+            // behind — that failure describes a request the user can no longer act on.
+            store.clearSendError(for: sessionID, ifKind: .question)
             if store.sessions.contains(where: { $0.id == sessionID }) {
                 store.update(id: sessionID) { s in
                     s.status = .asking
@@ -225,6 +228,9 @@ final class EventServer {
 
         case "plan":
             let plan = AgentPlan(markdown: event.plan ?? event.message ?? "Plan ready for review")
+            // A brand-new plan supersedes whatever the prior one's send attempt left
+            // behind — that failure describes a plan the user can no longer act on.
+            store.clearSendError(for: sessionID, ifKind: .plan)
             if store.sessions.contains(where: { $0.id == sessionID }) {
                 store.update(id: sessionID) { s in
                     s.status = .planning
@@ -384,6 +390,16 @@ final class EventServer {
         guard let parked = pending[sessionID], parked === conn else { return }
         pending.removeValue(forKey: sessionID)
         conn.cancel()
+        // The abandoned prompt's own send attempt (if any) is moot now too — this settles to
+        // `.idle`, not `.done`, so `update(id:_:)`'s own clearing wouldn't otherwise catch it.
+        // Scoped to whichever kind was actually pending: a `.permission` prompt has no
+        // matching `SendKind`, and clearing unconditionally would also wipe an unrelated
+        // kind's still-valid, still-unaddressed error (e.g. a failed chat message) just
+        // because a different prompt on the same session happened to expire.
+        if let session = store.sessions.first(where: { $0.id == sessionID }) {
+            if session.question != nil { store.clearSendError(for: sessionID, ifKind: .question) }
+            if session.plan != nil     { store.clearSendError(for: sessionID, ifKind: .plan) }
+        }
         // Drop whichever prompt is still set — the card renders on `permission`/`question`
         // being non-nil regardless of status, so clearing must not depend on the status
         // still being .waiting/.asking (a stray status event may have moved it on).
@@ -394,9 +410,6 @@ final class EventServer {
             if s.plan != nil       { s.plan = nil;       s.lastMessage = "Plan review expired" }
             if wasPending { s.status = .idle }
         }
-        // The abandoned prompt's own send attempt (if any) is moot now too — this settles to
-        // `.idle`, not `.done`, so `update(id:_:)`'s own clearing wouldn't otherwise catch it.
-        store.clearAllSendErrors(for: sessionID)
     }
 
     /// Drop a parked connection without a decision (the session ended or was removed).

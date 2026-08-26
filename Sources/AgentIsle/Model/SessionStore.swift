@@ -319,12 +319,16 @@ final class SessionStore: ObservableObject {
         // here would stick it open and defeat hover-driven auto-collapse after closing.
         openedMessages = []
         chatLoading = false
+        // Scoped to .message, the only kind tied to the chat input bar: .question/.plan
+        // errors surface on their own cards regardless of whether chat is open.
+        clearSendError(for: session.id, ifKind: .message)
         tailedURL = nil
         ensureTailing(session)   // flips chatLoading back on if there's a transcript to read
     }
 
     func closeChat() {
         tailer.stop()
+        if let id = openedSessionID { clearSendError(for: id, ifKind: .message) }
         openedSessionID = nil
         openedMessages = []
         chatLoading = false
@@ -356,7 +360,7 @@ final class SessionStore: ObservableObject {
 
     /// Surface a failed send once, in one place: the message plus whether the chat view
     /// should offer the Accessibility settings shortcut. Only ever touches `kind`'s own entry.
-    private func report(_ error: MessageSender.SendError, sessionID: UUID, kind: SendKind) {
+    func report(_ error: MessageSender.SendError, sessionID: UUID, kind: SendKind) {
         sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] =
             SendErrorInfo(message: error.userMessage, needsAccessibility: isAccessibilityDenied(error),
                           reportedAt: Date())
@@ -369,9 +373,10 @@ final class SessionStore: ObservableObject {
     }
 
     /// Dismiss `kind`'s error for `sessionID` — called before starting a new attempt of that
-    /// kind, so it can optimistically clear its own stale error without touching any other
-    /// kind's entry.
-    private func clearSendError(for sessionID: UUID, ifKind kind: SendKind) {
+    /// kind, or once a prior failure of that kind is no longer relevant (chat closed, a new
+    /// prompt of that kind superseded it) — so it can optimistically clear its own stale error
+    /// without touching any other kind's entry.
+    func clearSendError(for sessionID: UUID, ifKind kind: SendKind) {
         sendErrors[SendAttemptKey(sessionID: sessionID, kind: kind)] = nil
     }
 
@@ -498,6 +503,11 @@ final class SessionStore: ObservableObject {
         guard !trimmed.isEmpty else { return }
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: "; ")
         let session = sessions.first { $0.id == sessionID }
+        // Mirrors `resolvePlan`'s `guard session?.plan != nil`: a second, near-simultaneous
+        // call for the same question (double-click, double Return) must no-op once the first
+        // call has already cleared it, rather than re-delivering and double-counting whatever
+        // side effects `deliver` triggers.
+        guard session?.question != nil else { return }
         let viaTranscript = session?.question?.source == .transcript
 
         // Editor extension: jump to the *exact* session via its deep-link (this is the only
