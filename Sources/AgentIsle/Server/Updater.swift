@@ -51,10 +51,13 @@ final class Updater: ObservableObject {
     /// (`AHMED ELKHAYYAT (ZS3A435WC2)`). Change only if the Apple team changes;
     /// auto-update must not accept another signer without an explicit commit.
     nonisolated static let expectedTeamID = "ZS3A435WC2"
-    /// `codesign -R=` requirement: Apple generic anchor + this team's OU.
-    /// `--verify --strict` alone accepts ad-hoc signatures; this does not.
+    /// `codesign -R=` requirement: official Developer ID Application signing chain
+    /// from this team. `--verify --strict` alone accepts ad-hoc signatures; this does not.
     nonisolated static var codesignRequirement: String {
-        "anchor apple generic and certificate leaf[subject.OU] = \(expectedTeamID)"
+        "anchor apple generic"
+        + " and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+        + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+        + " and certificate leaf[subject.OU] = \(expectedTeamID)"
     }
 
     private let autoInstallKey = "autoInstallUpdates"
@@ -368,7 +371,7 @@ final class Updater: ObservableObject {
     /// Quarantine is only cleared after the candidate already passed
     /// `verifyUpdateCandidate` — never as a substitute for signature checks.
     /// The helper re-runs the same codesign requirement immediately before `ditto`
-    /// so a same-user swap of the temp bundle after we quit cannot land.
+    /// so a casual same-user swap of the temp bundle after we quit does not land.
     nonisolated private static func installAndRelaunch(newApp: URL, dest: URL) throws {
         let pid = ProcessInfo.processInfo.processIdentifier
         let script = """

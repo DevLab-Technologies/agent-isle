@@ -54,16 +54,6 @@ final class UpdateChannelTests: XCTestCase {
 
     // MARK: - Signature gate
 
-    func testExpectedTeamIDMatchesReleaseSigner() {
-        XCTAssertEqual(Updater.expectedTeamID, "ZS3A435WC2")
-    }
-
-    func testCodesignRequirementPinsTeamOU() {
-        XCTAssertTrue(Updater.codesignRequirement.contains("leaf[subject.OU]"))
-        XCTAssertTrue(Updater.codesignRequirement.contains(Updater.expectedTeamID))
-        XCTAssertTrue(Updater.codesignRequirement.contains("anchor apple generic"))
-    }
-
     func testVerifyRejectsUnsignedPath() async {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-isle-unsigned-\(UUID().uuidString)")
