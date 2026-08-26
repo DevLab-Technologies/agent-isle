@@ -33,6 +33,10 @@ final class EventAuthTokenTests: XCTestCase {
 
         let body = try String(contentsOf: file, encoding: .utf8)
         XCTAssertEqual(body, "deadbeef")
+
+        try EventAuthToken.write("cafebabe", directory: dir)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "cafebabe")
+        XCTAssertEqual(try posixMode(of: file), 0o600)
     }
 
     private func posixMode(of url: URL) throws -> UInt16 {

@@ -22,9 +22,9 @@ enum EventAuthToken {
         directoryURL.appendingPathComponent("token", isDirectory: false)
     }
 
-    /// Load the existing token, or create one if missing. Best-effort: on total failure
-    /// returns a process-local random token so the server still rejects strangers (hooks
-    /// simply won't match until the file becomes writable).
+    /// Load the existing token, or create one if missing. On persistence failure the caller
+    /// still receives a process-local random token, but production authentication remains
+    /// unavailable until a token can be written and read back from disk.
     nonisolated static func loadOrCreate() -> String {
         if let existing = read() { return existing }
         let token = randomToken()
@@ -93,10 +93,11 @@ enum EventAuthToken {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO), userInfo: nil)
         }
 
-        if fm.fileExists(atPath: dest.path) {
-            try fm.removeItem(at: dest)
+        guard Darwin.rename(tmp.path, dest.path) == 0 else {
+            let code = errno
+            try? fm.removeItem(at: tmp)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: nil)
         }
-        try fm.moveItem(at: tmp, to: dest)
     }
 
     nonisolated private static func randomToken() -> String {
