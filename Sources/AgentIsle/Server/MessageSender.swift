@@ -1,13 +1,17 @@
 import AppKit
+import ApplicationServices
 import os
 
 /// Delivers a typed message into a running agent session's terminal.
 ///
 /// Claude Code has no API to inject a prompt, so this drives the host terminal:
-///   • iTerm2 / Terminal.app  → their AppleScript dictionaries (`write text` / `do script`),
-///     which need no extra permission and target the terminal's current session directly.
-///   • everything else        → focus the app, then synthesize the keystrokes (types the
-///     text via a CGEvent and presses Return). This needs macOS Accessibility permission.
+///   • iTerm2           → AppleScript `write text` on the current session (no Accessibility
+///     prompt; needs Automation permission for iTerm).
+///   • everything else  → focus the app, then synthesize keystrokes (CGEvent unicode + Return).
+///     This needs macOS Accessibility permission.
+///
+/// Terminal.app is intentionally **not** scripted with `do script`: that command runs a
+/// shell line (often in a new tab) rather than typing into the live agent session.
 @MainActor
 enum MessageSender {
     enum SendError: Error {
@@ -19,6 +23,7 @@ enum MessageSender {
         case accessibilityDenied(staleGrantSuspected: Bool)
         case automationDenied(String)
         case couldNotFocus(String)
+        case noTargetWindow(String)
         case scriptFailed(String)
 
         /// A short, user-facing explanation shown under the input bar.
@@ -35,15 +40,17 @@ enum MessageSender {
                 return "Allow Agent Isle to control \(app) in System Settings › Privacy › Automation, then try again."
             case .couldNotFocus(let app):
                 return "Couldn't bring \(app) forward to deliver the answer — focus it and try again."
+            case .noTargetWindow(let app):
+                return "No open \(app) window for this session — reopen it and try again."
             case .scriptFailed(let detail):
                 return "Couldn't send: \(detail)"
             }
         }
     }
 
-    // Bundle identifiers we can script directly instead of simulating keystrokes.
-    private static let iterm = "com.googlecode.iterm2"
-    private static let terminal = "com.apple.Terminal"
+    /// Only iTerm exposes a safe "type into current session" AppleScript verb.
+    /// `nonisolated` so AppleScript helpers (off the main actor) can embed the id.
+    nonisolated private static let iterm = "com.googlecode.iterm2"
 
     // MARK: - Stale-completion guarding
 
@@ -105,14 +112,11 @@ enum MessageSender {
         let line = text.replacingOccurrences(of: "\n", with: " ")
         let bundle = session.terminalBundleID ?? bundleID(forLabel: session.terminal)
 
-        switch bundle {
-        case iterm:
+        if bundle == iterm {
             runScriptOffMain(itermScript(line), app: "iTerm2", generation: generation, channel: channel,
                              completion: guarded)
-        case terminal:
-            runScriptOffMain(terminalScript(line), app: "Terminal", generation: generation, channel: channel,
-                             completion: guarded)
-        default:
+        } else {
+            // Terminal.app, Ghostty, Warp, VS Code, Claude Desktop, …
             sendViaKeystrokes(line, to: session, generation: generation, channel: channel, completion: guarded)
         }
     }
@@ -153,18 +157,6 @@ enum MessageSender {
         """
     }
 
-    nonisolated private static func terminalScript(_ text: String) -> String {
-        // `front window` errors if Terminal has no open window — surface a clear reason
-        // instead of the raw AppleScript error.
-        """
-        tell application id "\(terminal)"
-            activate
-            if (count of windows) is 0 then error "no open Terminal window for this session"
-            do script "\(escape(text))" in front window
-        end tell
-        """
-    }
-
     nonisolated private static func runAppleScript(_ source: String, app: String) -> Result<Void, SendError> {
         var errorInfo: NSDictionary?
         guard let script = NSAppleScript(source: source) else {
@@ -192,7 +184,7 @@ enum MessageSender {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    // MARK: - Keystroke fallback
+    // MARK: - Keystroke delivery
 
     private static func sendViaKeystrokes(_ text: String, to session: AgentSession,
                                           generation: Int, channel: AnyHashable,
@@ -211,6 +203,15 @@ enum MessageSender {
             return
         case .alreadyAsked:
             completion(.failure(.accessibilityDenied(staleGrantSuspected: AccessibilityPermission.shouldWarnStaleGrant)))
+            return
+        }
+        // Check *before* activating. `Jumper.jump` / reopen can spawn a fresh login
+        // window when the user has closed every Terminal tab — typing+Return there
+        // would execute the payload as a shell command, the hazard this PR removes.
+        // Unknown bundle (open-URL jump) skips the check, same as waitUntilFrontmost.
+        if let bundle = Jumper.targetBundleID(for: session),
+           !runningAppHasWindow(bundleID: bundle) {
+            completion(.failure(.noTargetWindow(session.terminal)))
             return
         }
         // Bring the session's app forward, then type only once it is actually frontmost.
@@ -258,6 +259,26 @@ enum MessageSender {
         poll()
     }
 
+    /// True when a running copy of `bundleID` exposes at least one Accessibility window.
+    /// Unlike `CGWindowListCopyWindowInfo`, this excludes menu-bar surfaces, panels, and
+    /// stale compositor entries after the user closes the app's final window. Minimized
+    /// windows remain present, so Cmd-M does not prevent delivery.
+    private static func runningAppHasWindow(bundleID: String) -> Bool {
+        guard let pid = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .first(where: { !$0.isTerminated })?.processIdentifier else {
+            return false
+        }
+
+        var value: CFTypeRef?
+        let app = AXUIElementCreateApplication(pid)
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success else {
+            // Accessibility is already trusted at this point. If the query still fails,
+            // don't block every keystroke host on a window state we couldn't determine.
+            return true
+        }
+        return !((value as? [AXUIElement])?.isEmpty ?? true)
+    }
+
     /// Maximum UTF-16 units per synthesized event. A single event carrying a long
     /// unicode string is delivered unreliably — many apps drop everything past a small
     /// buffer — so the text is posted in small chunks split on grapheme boundaries.
@@ -301,11 +322,10 @@ enum MessageSender {
 
     // MARK: - Helpers
 
-    /// Map a terminal display label to a bundle id for the AppleScript-capable apps.
+    /// Map a terminal display label to the iTerm bundle id when AppleScript delivery applies.
     private static func bundleID(forLabel label: String) -> String? {
         switch label {
         case "iTerm", "iTerm2": return iterm
-        case "Terminal": return terminal
         default: return nil
         }
     }
