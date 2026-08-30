@@ -709,8 +709,12 @@ final class RemoteActionServer {
       const hint = document.getElementById('hint');
       if (!('Notification' in window)) {
         bell.textContent = '🔕 Notifications unavailable'; bell.className = 'bell muted';
-        hint.textContent =
-          'Notifications need HTTPS on this browser — not available over this plain-HTTP link.';
+        // Two distinct blockers can produce this same "API doesn't exist" state — tell
+        // the user which one actually applies instead of always blaming HTTPS, which
+        // would be wrong (and had been shown as wrong) once the page is already secure.
+        hint.textContent = location.protocol !== 'https:'
+          ? 'Notifications need HTTPS on this browser — not available over this plain-HTTP link.'
+          : 'On iPhone, a regular Safari tab can\\'t use notifications even over HTTPS — add this page to your Home Screen (Share → Add to Home Screen) and reopen it from there.';
         return;
       }
       if (Notification.permission === 'granted') {
