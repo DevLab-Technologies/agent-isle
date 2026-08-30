@@ -64,7 +64,7 @@ private struct RemoteApprovalPopover: View {
                     .resizable()
                     .frame(width: 180, height: 180)
             }
-            Text("Scan to approve any session from your phone")
+            Text(reachabilityCaption)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -75,5 +75,23 @@ private struct RemoteApprovalPopover: View {
         }
         .padding(16)
         .frame(width: 212)
+        // Prefer Tailscale by default when both are available: it's the one that still
+        // works once the phone (or the Mac) leaves the house, which is the harder and
+        // more common case people reach for this for.
+        .onAppear {
+            if let tailscaleIdx = link.endpoints.firstIndex(where: { $0.kind == .tailscale }) {
+                selected = tailscaleIdx
+            }
+        }
+    }
+
+    private var reachabilityCaption: String {
+        guard selected < link.endpoints.count else { return "" }
+        switch link.endpoints[selected].kind {
+        case .lan:
+            return "Works only while your phone is on this same Wi-Fi/network."
+        case .tailscale:
+            return "Works from anywhere — as long as Tailscale is on for both devices."
+        }
     }
 }
