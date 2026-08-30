@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Global "Connect phone" control in the island's header — mints (or reuses) a standing
 /// pairing link covering every session, so the phone can act on whichever
@@ -63,6 +64,11 @@ private struct RemoteApprovalPopover: View {
     let link: RemoteAccessLink
     let onDisconnect: () -> Void
     @State private var selected = 0
+    @State private var copied = false
+
+    private var currentURL: URL? {
+        selected < link.endpoints.count ? link.endpoints[selected].url : nil
+    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -75,8 +81,7 @@ private struct RemoteApprovalPopover: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
-            if selected < link.endpoints.count,
-               let image = QRCode.image(for: link.endpoints[selected].url.absoluteString) {
+            if let url = currentURL, let image = QRCode.image(for: url.absoluteString) {
                 Image(nsImage: image)
                     .interpolation(.none)
                     .resizable()
@@ -86,6 +91,18 @@ private struct RemoteApprovalPopover: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            HStack(spacing: 6) {
+                Button {
+                    copyLink()
+                } label: {
+                    Label(copied ? "Copied!" : "Copy Link", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                ShareLinkButton(url: currentURL)
+                    .controlSize(.small)
+            }
             Button("Disconnect", action: onDisconnect)
                 .buttonStyle(.plain)
                 .font(.system(size: 10, weight: .medium))
@@ -103,6 +120,14 @@ private struct RemoteApprovalPopover: View {
         }
     }
 
+    private func copyLink() {
+        guard let url = currentURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+    }
+
     private var reachabilityCaption: String {
         guard selected < link.endpoints.count else { return "" }
         switch link.endpoints[selected].kind {
@@ -111,5 +136,30 @@ private struct RemoteApprovalPopover: View {
         case .tailscale:
             return "Works from anywhere — as long as Tailscale is on for both devices."
         }
+    }
+}
+
+/// Presents macOS's native share sheet (Messages, AirDrop, Mail, etc.) for the link, so it
+/// can reach the phone without scanning a QR code at all.
+private struct ShareLinkButton: View {
+    let url: URL?
+
+    var body: some View {
+        Button {
+            guard let url, let anchor = Self.anchorView() else { return }
+            let picker = NSSharingServicePicker(items: [url])
+            picker.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        } label: {
+            Label("Share…", systemImage: "square.and.arrow.up")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.bordered)
+        .disabled(url == nil)
+    }
+
+    /// Any visible window's content view works as the picker's anchor — this popover
+    /// isn't hosted in a normal app window, so there's no single "right" one to reach for.
+    private static func anchorView() -> NSView? {
+        NSApp.windows.first(where: { $0.isVisible })?.contentView
     }
 }

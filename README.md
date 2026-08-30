@@ -187,6 +187,9 @@ persists across an app restart or update and is good for 30 days, so it stays re
 without a rescan unless you tap "Disconnect" — only the network you're on decides whether
 either link can actually reach the Mac at that moment.
 
+Don't want to scan a QR code? "Copy Link" puts the current one on the clipboard, and
+"Share…" opens the normal macOS share sheet (Messages, AirDrop, Mail, …) for it.
+
 Tap the bell at the top of the page to ask the phone's browser for notification
 permission — it'll then notify you when a session starts needing you, or finishes,
 without having to keep checking. This needs the page to be loaded over HTTPS (the
