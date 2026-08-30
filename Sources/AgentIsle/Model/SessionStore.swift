@@ -42,6 +42,14 @@ final class SessionStore: ObservableObject {
     /// Zero for the expanded panel, which is symmetric.
     @Published var islandOffsetX: CGFloat = 0
 
+    /// True while a `.popover` anchored to something in the island (e.g. the remote-approval
+    /// QR popup) is showing. Such a popover renders in its own window, outside the island's
+    /// tracked hit-rect — `NotchWindow.syncHoverToPointer` treats the pointer as "inside"
+    /// unconditionally while this is set, so moving toward a control near the bottom of the
+    /// popover doesn't read as the pointer leaving the island and collapse it out from under
+    /// the popover.
+    @Published var popoverActive: Bool = false
+
     // MARK: - Live chat
 
     /// The session whose full conversation is currently open, or nil for the list view.

@@ -5,6 +5,7 @@ import AppKit
 /// pairing link covering every session, so the phone can act on whichever
 /// permission/question/plan comes up while it's paired, not just one prompt.
 struct RemoteApprovalButton: View {
+    @EnvironmentObject var store: SessionStore
     @State private var link: RemoteAccessLink?
     @State private var showPopover = false
     @State private var failed = false
@@ -38,6 +39,7 @@ struct RemoteApprovalButton: View {
         .help("Connect a phone to approve from anywhere")
         .fixedSize()
         .onAppear { connected = RemoteActionServer.shared.isConnected }
+        .onChange(of: showPopover) { _, isShowing in store.popoverActive = isShowing }
         .popover(isPresented: $showPopover, arrowEdge: .bottom) {
             if loading {
                 ProgressView()
