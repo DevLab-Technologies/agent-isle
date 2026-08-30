@@ -156,11 +156,24 @@ card inline for whichever ones have a permission, question, or plan pending. Tap
 on any session for its full conversation — read the same way the in-app chat view does,
 with thinking/tool-calls/tool-results styled distinctly from plain replies (not flattened
 into one paragraph), timestamps, sent/received messages styled distinctly, and a message
-box to send your own into the session — all fixed in place (header and composer stay put;
-only the messages scroll) so you never lose your place reaching Back or Send. No account,
-app, or backend to run: the page is served by Agent Isle itself, over your LAN or over
-[Tailscale](https://tailscale.com) if it's running on both devices (Tailscale just shows
-up as another reachable address — nothing extra to configure here).
+box to send your own into the session (📷 sends a photo — it's saved to
+`~/.agent-isle/uploads/` and delivered as a "Image attached: &lt;path&gt;" message, since a
+terminal-based agent has no generic image-attachment channel the way a chat app does) —
+all fixed in place (header and composer stay put; only the messages scroll) so you never
+lose your place reaching Back or Send. No account, app, or backend to run: the page is
+served by Agent Isle itself, over your LAN or over [Tailscale](https://tailscale.com) if
+it's running on both devices (Tailscale just shows up as another reachable address —
+nothing extra to configure here).
+
+When Tailscale's ["HTTPS Certificates"](https://tailscale.com/kb/1153/enabling-https)
+feature is on for your tailnet, the Tailscale link is served over real HTTPS
+automatically — Agent Isle fetches a Let's Encrypt cert for the Mac's MagicDNS name via
+`tailscale cert` (a real network round trip the first time, ~20–30s; cached and reused
+after that, renewed a week before its ~90-day expiry) and serves TLS from a second
+listener (`:4713`). This is what makes the "needs HTTPS" notification limitation moot
+over Tailscale specifically, and removes the browser's "Not Secure" warning. Nothing to
+configure on the Agent Isle side; if Tailscale isn't installed or that feature isn't
+enabled, the Tailscale link just stays plain HTTP, same as before this existed.
 
 Per-command elapsed time and per-command token cost aren't shown — the app doesn't track
 either anywhere today (not even on macOS), so surfacing them would need new
@@ -176,9 +189,11 @@ either link can actually reach the Mac at that moment.
 
 Tap the bell at the top of the page to ask the phone's browser for notification
 permission — it'll then notify you when a session starts needing you, or finishes,
-without having to keep checking. This rides the plain browser `Notification` API off the
-same poll the page already does, so it only fires while the page is open (foreground, or
-briefly backgrounded) — it is not push, and won't wake the phone from locked or the tab
+without having to keep checking. This needs the page to be loaded over HTTPS (the
+Tailscale link, once the automatic-cert setup above has kicked in — plain HTTP, including
+"Same Network", can't use it at all). This rides the plain browser `Notification` API off
+the same poll the page already does, so it only fires while the page is open (foreground,
+or briefly backgrounded) — it is not push, and won't wake the phone from locked or the tab
 fully closed. On iPhone, Safari also requires the page be added to the Home Screen before
 notifications work at all. True background push would need HTTPS, a Home
 Screen–installed PWA, and the Web Push protocol implemented Mac-side — a bigger lift than

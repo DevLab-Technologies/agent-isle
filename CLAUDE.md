@@ -49,7 +49,7 @@ Two install paths exist and must stay consistent:
 
 `Sound/SoundPlayer` synthesizes square-wave chiptune alerts at runtime — there are no audio asset files.
 
-`RemoteActionServer` is a second `NWListener`, on `:4712`, intentionally bound to every interface (not just loopback) so a phone on the LAN or over Tailscale can reach it — see its module comment for the token-scoped security model. `HTTPFraming` holds the HTTP/1.1 request-framing logic shared with `EventServer`; `NetworkInterfaces` detects the LAN/Tailscale addresses the QR links are built from.
+`RemoteActionServer` is a second `NWListener`, on `:4712` (plain HTTP) and `:4713` (TLS), intentionally bound to every interface (not just loopback) so a phone on the LAN or over Tailscale can reach it — see its module comment for the token-scoped security model. `HTTPFraming` holds the HTTP/1.1 request-framing logic shared with `EventServer`; `NetworkInterfaces` detects the LAN/Tailscale addresses the QR links are built from. `TailscaleCert` shells out to the `tailscale` CLI to fetch/renew an HTTPS cert for the Mac's MagicDNS name (only when the tailnet has that feature enabled); `TLSIdentity` turns that PEM cert+key into a `sec_identity_t` via a PKCS#12 import into a dedicated, non-login keychain, which is what `:4713` actually serves TLS with.
 
 ## Conventions
 

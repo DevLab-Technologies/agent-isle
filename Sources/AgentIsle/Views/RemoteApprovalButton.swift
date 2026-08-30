@@ -8,13 +8,26 @@ struct RemoteApprovalButton: View {
     @State private var showPopover = false
     @State private var failed = false
     @State private var connected = false
+    @State private var loading = false
 
     var body: some View {
         Button {
-            link = RemoteActionServer.shared.currentLink()
-            failed = link == nil
-            connected = link != nil
+            // Show the popover immediately with a spinner rather than computing the link
+            // synchronously in this tap — starting the listener (and, the first time,
+            // fetching a Tailscale HTTPS cert) can take a real, visible moment, and doing
+            // that work before the popover ever appears is what produced the stuck/blank
+            // icon: the button had nothing to show yet.
+            link = nil
+            failed = false
+            loading = true
             showPopover = true
+            Task {
+                let result = await RemoteActionServer.shared.currentLink()
+                link = result
+                failed = result == nil
+                connected = result != nil
+                loading = false
+            }
         } label: {
             Image(systemName: connected ? "qrcode.viewfinder" : "qrcode")
                 .font(.system(size: 11))
@@ -25,7 +38,12 @@ struct RemoteApprovalButton: View {
         .fixedSize()
         .onAppear { connected = RemoteActionServer.shared.isConnected }
         .popover(isPresented: $showPopover, arrowEdge: .bottom) {
-            if let link {
+            if loading {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 180, height: 180)
+                    .padding(16)
+            } else if let link {
                 RemoteApprovalPopover(link: link) {
                     RemoteActionServer.shared.disconnect()
                     connected = false

@@ -41,14 +41,26 @@ final class RemoteActionServer {
     static let shared = RemoteActionServer()
 
     static let port: UInt16 = 4712
-    static let maxRequestSize = 16 * 1024
+    static let httpsPort: UInt16 = 4713
+    // Large enough for a phone photo as base64 (~33% larger than the original file) —
+    // every other route's body is a few hundred bytes at most, so this only matters for
+    // the image-upload route.
+    static let maxRequestSize = 16 * 1024 * 1024
     // Long enough that a real, relied-upon pairing (e.g. away from home for a few weeks)
     // doesn't quietly expire out from under the user — "Disconnect" is the intended way
     // to end one deliberately, this is just a backstop.
     private static let tokenTTL: TimeInterval = 30 * 24 * 60 * 60
     private static let defaultsKey = "RemoteActionServer.pairing"
+    nonisolated private static let tlsDirectory: URL = {
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".agent-isle/tls")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
 
     private var listener: NWListener?
+    private var httpsListener: NWListener?
+    private var tailscaleHTTPS: (dnsName: String, expiresAt: Date)?
+    private var tailscaleSetupStarted = false
     private weak var store: SessionStore?
     private var activeToken: (token: String, expiresAt: Date)? {
         didSet { persistToken() }
@@ -73,9 +85,12 @@ final class RemoteActionServer {
 
     /// The current pairing link, minting one only if none is active (or the previous one
     /// expired) — reopening this popover shows the same link rather than silently
-    /// invalidating whatever the phone already scanned. Starts the listener on first
-    /// call; returns nil if it can't start or no interface (LAN/Tailscale) is reachable.
-    func currentLink() -> RemoteAccessLink? {
+    /// invalidating whatever the phone already scanned. Starts the listener (and kicks
+    /// off Tailscale HTTPS setup in the background, see `setUpTailscaleHTTPSIfNeeded`) on
+    /// first call; returns nil if it can't start or no interface (LAN/Tailscale) is
+    /// reachable. `async` so the caller can show a placeholder first — this itself
+    /// resolves quickly, but callers shouldn't assume every future version of it will.
+    func currentLink() async -> RemoteAccessLink? {
         guard store != nil else { return nil }
         if listener == nil { start() }
         guard listener != nil else { return nil }
@@ -117,10 +132,102 @@ final class RemoteActionServer {
         let addresses = NetworkInterfaces.reachableAddresses()
         guard !addresses.isEmpty else { return nil }
         let endpoints = addresses.compactMap { addr -> RemoteAccessLink.Endpoint? in
+            // Prefer the Tailscale HTTPS listener once it's ready — real TLS against the
+            // MagicDNS name, not just the plain-HTTP fallback every link starts as.
+            if addr.kind == .tailscale, let https = tailscaleHTTPS, https.expiresAt > Date(),
+               let url = URL(string: "https://\(https.dnsName):\(Self.httpsPort)/r/\(token)") {
+                return RemoteAccessLink.Endpoint(kind: .tailscale, url: url)
+            }
             guard let url = URL(string: "http://\(addr.host):\(Self.port)/r/\(token)") else { return nil }
             return RemoteAccessLink.Endpoint(kind: addr.kind, url: url)
         }
         return endpoints.isEmpty ? nil : RemoteAccessLink(endpoints: endpoints)
+    }
+
+    // MARK: - Tailscale HTTPS
+
+    /// Kicks off Tailscale HTTPS setup at most once per launch, entirely in the
+    /// background — cheap if a cached, still-valid cert exists (just rebuilds the
+    /// ephemeral keychain identity, well under a second), slow (~20–30s, a real network
+    /// round trip to Tailscale's CA) only the first time or when renewing near expiry.
+    /// Never blocks `currentLink()`: the Tailscale endpoint just stays plain HTTP for any
+    /// call made before this finishes, and upgrades to HTTPS on the next one after.
+    /// Silently does nothing if Tailscale isn't installed or HTTPS certs aren't enabled
+    /// for the tailnet.
+    private func setUpTailscaleHTTPSIfNeeded() {
+        guard !tailscaleSetupStarted else { return }
+        tailscaleSetupStarted = true
+        Task.detached(priority: .utility) { [weak self] in
+            guard let prepared = Self.prepareTailscaleHTTPS() else { return }
+            await self?.startHTTPSListener(prepared)
+        }
+    }
+
+    private struct PreparedCert {
+        let certPEM: String
+        let keyPEM: String
+        let dnsName: String
+        let expiresAt: Date
+    }
+
+    /// Runs entirely off the main actor (called from a detached `Task`): reuses a cached
+    /// cert from a prior launch if it's still comfortably valid, otherwise fetches or
+    /// renews one via `TailscaleCert` — the slow path.
+    nonisolated private static func prepareTailscaleHTTPS() -> PreparedCert? {
+        guard let dnsName = TailscaleCert.magicDNSName() else { return nil }
+        let certPath = tlsDirectory.appendingPathComponent("cert.pem")
+        let keyPath = tlsDirectory.appendingPathComponent("key.pem")
+        let renewalBuffer: TimeInterval = 7 * 24 * 60 * 60
+
+        if let cachedCert = try? String(contentsOf: certPath, encoding: .utf8),
+           let cachedKey = try? String(contentsOf: keyPath, encoding: .utf8),
+           let cachedExpiry = TailscaleCert.expiry(ofPEM: cachedCert),
+           cachedExpiry.timeIntervalSinceNow > renewalBuffer {
+            return PreparedCert(certPEM: cachedCert, keyPEM: cachedKey, dnsName: dnsName, expiresAt: cachedExpiry)
+        }
+
+        guard let cert = TailscaleCert.obtain(dnsName: dnsName) else { return nil }
+        try? cert.certPEM.write(to: certPath, atomically: true, encoding: .utf8)
+        try? cert.keyPEM.write(to: keyPath, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyPath.path)
+        return PreparedCert(certPEM: cert.certPEM, keyPEM: cert.keyPEM, dnsName: cert.dnsName, expiresAt: cert.expiresAt)
+    }
+
+    private func startHTTPSListener(_ prepared: PreparedCert) {
+        guard httpsListener == nil else {
+            tailscaleHTTPS = (prepared.dnsName, prepared.expiresAt)
+            return
+        }
+        guard let identity = TLSIdentity.make(certPEM: prepared.certPEM, keyPEM: prepared.keyPEM,
+                                              in: Self.tlsDirectory) else {
+            NSLog("RemoteActionServer: couldn't build a TLS identity from the Tailscale cert")
+            return
+        }
+        let tlsOptions = NWProtocolTLS.Options()
+        sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, identity)
+        let params = NWParameters(tls: tlsOptions, tcp: .init())
+        params.allowLocalEndpointReuse = true
+        do {
+            let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: Self.httpsPort)!)
+            listener.stateUpdateHandler = { state in
+                if case .failed(let error) = state {
+                    NSLog("RemoteActionServer HTTPS failed: \(error)")
+                }
+            }
+            listener.newConnectionHandler = { [weak self] conn in
+                conn.stateUpdateHandler = { state in
+                    if case .failed(let error) = state { NSLog("RemoteActionServer HTTPS conn failed: \(error)") }
+                }
+                conn.start(queue: .main)
+                Task { @MainActor [weak self] in self?.receive(on: conn) }
+            }
+            listener.start(queue: .main)
+            self.httpsListener = listener
+            self.tailscaleHTTPS = (prepared.dnsName, prepared.expiresAt)
+            NSLog("RemoteActionServer HTTPS listening on :\(Self.httpsPort) for \(prepared.dnsName)")
+        } catch {
+            NSLog("RemoteActionServer HTTPS could not start: \(error)")
+        }
     }
 
     private static func randomToken() -> String {
@@ -146,6 +253,9 @@ final class RemoteActionServer {
                 }
             }
             listener.newConnectionHandler = { [weak self] conn in
+                conn.stateUpdateHandler = { state in
+                    if case .failed(let error) = state { NSLog("RemoteActionServer conn failed: \(error)") }
+                }
                 conn.start(queue: .main)
                 Task { @MainActor [weak self] in self?.receive(on: conn) }
             }
@@ -155,6 +265,7 @@ final class RemoteActionServer {
         } catch {
             NSLog("RemoteActionServer could not start: \(error)")
         }
+        setUpTailscaleHTTPSIfNeeded()
     }
 
     // MARK: - Request handling
@@ -231,6 +342,8 @@ final class RemoteActionServer {
             handlePlan(body: body, conn: conn)
         case ("POST", "message"):
             handleMessage(body: body, conn: conn)
+        case ("POST", "image"):
+            handleImage(body: body, conn: conn)
         default:
             respondNotFound(conn)
         }
@@ -297,6 +410,41 @@ final class RemoteActionServer {
         }
         store.sendMessage(text, to: session)
         respondJSON(conn, ["ok": true])
+    }
+
+    /// Saves an uploaded image to disk and sends a message referencing its path — there's
+    /// no generic "attach an image" channel into a terminal-based agent the way a chat app
+    /// has, so the agent sees it the same way it'd see a path the user typed, and can
+    /// `Read` it if it chooses to. Delivery is the same best-effort typing `sendMessage`
+    /// always uses.
+    private func handleImage(body: Data, conn: NWConnection) {
+        let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        guard let store, let sessionID = targetSession(obj),
+              let base64 = obj?["data"] as? String, let imageData = Data(base64Encoded: base64),
+              let session = store.sessions.first(where: { $0.id == sessionID }) else {
+            respondBadRequest(conn); return
+        }
+        let ext = Self.fileExtension(forMIME: obj?["mime"] as? String)
+        let fileURL = Self.uploadsDirectory.appendingPathComponent("photo-\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)")
+        guard (try? imageData.write(to: fileURL)) != nil else { respondBadRequest(conn); return }
+        store.sendMessage("Image attached: \(fileURL.path)", to: session)
+        respondJSON(conn, ["ok": true])
+    }
+
+    nonisolated private static let uploadsDirectory: URL = {
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".agent-isle/uploads")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    nonisolated private static func fileExtension(forMIME mime: String?) -> String {
+        switch mime {
+        case "image/png": return "png"
+        case "image/webp": return "webp"
+        case "image/gif": return "gif"
+        case "image/heic", "image/heif": return "heic"
+        default: return "jpg"
+        }
     }
 
     /// Every session across the store, mirroring what the macOS island itself shows — the
@@ -513,6 +661,8 @@ final class RemoteActionServer {
                         border-radius:20px; padding:11px 15px; font-size:15px; min-width:0; }
       .composer button { width:auto; flex:0 0 auto; margin:0; padding:0 18px;
                          border-radius:20px; background:#5cd48c; color:#000; font-size:14px; }
+      .composer button.attach { padding:0 10px; background:#26262b; font-size:18px; }
+      .composer button.attach:disabled { opacity:.5; }
     </style></head><body>
     <h1>Agent Isle <button class="bell" id="bell" onclick="toggleNotifications()">…</button></h1>
     <div id="root" class="empty">Loading…</div>
@@ -524,6 +674,8 @@ final class RemoteActionServer {
       </div>
       <div id="historyBody"></div>
       <div class="composer">
+        <button class="attach" onclick="document.getElementById('imagePicker').click()">📷</button>
+        <input type="file" id="imagePicker" accept="image/*" style="display:none" onchange="sendChatImage(this)">
         <input id="composerInput" placeholder="Message…"
                onkeydown="if(event.key==='Enter'){event.preventDefault();sendChatMessage();}">
         <button onclick="sendChatMessage()">Send</button>
@@ -691,6 +843,32 @@ final class RemoteActionServer {
       // Best-effort delivery (typed into the host terminal, same as the macOS composer) —
       // no confirmed echo, so the sent text only reappears once the transcript picks it up.
       await loadHistory();
+    }
+    function readFileAsDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+    async function sendChatImage(input) {
+      const file = input.files && input.files[0];
+      if (!file || !historySession) return;
+      const attachBtn = document.querySelector('.composer .attach');
+      attachBtn.disabled = true;
+      attachBtn.textContent = '…';
+      try {
+        const dataURL = await readFileAsDataURL(file);
+        const comma = dataURL.indexOf(',');
+        const base64 = dataURL.slice(comma + 1);
+        await post('image', {session: historySession, data: base64, mime: file.type});
+        await loadHistory();
+      } catch (e) {} finally {
+        input.value = '';
+        attachBtn.disabled = false;
+        attachBtn.textContent = '📷';
+      }
     }
     function blockHTML(b) {
       if (b.kind === 'text') return `<div class="blk text">${esc(b.text)}</div>`;
