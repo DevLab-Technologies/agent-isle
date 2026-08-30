@@ -58,6 +58,7 @@ struct PlanReviewCard: View {
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.85))
             Spacer()
+            RemoteApprovalButton(sessionID: session.id)
             Text(session.agent.displayName)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .foregroundStyle(accent)

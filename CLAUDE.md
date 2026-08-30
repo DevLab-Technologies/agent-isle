@@ -49,9 +49,11 @@ Two install paths exist and must stay consistent:
 
 `Sound/SoundPlayer` synthesizes square-wave chiptune alerts at runtime — there are no audio asset files.
 
+`RemoteActionServer` is a second `NWListener`, on `:4712`, intentionally bound to every interface (not just loopback) so a phone on the LAN or over Tailscale can reach it — see its module comment for the token-scoped security model. `HTTPFraming` holds the HTTP/1.1 request-framing logic shared with `EventServer`; `NetworkInterfaces` detects the LAN/Tailscale addresses the QR links are built from.
+
 ## Conventions
 
 - **No external dependencies.** Use system frameworks (SwiftUI, AppKit, Network) only; don't add SwiftPM dependencies.
 - **New agent adapters** are small additions to `ExternalAgents.swift` that read a tool's session history and return `ExternalSession` values.
-- The event server is deliberately pinned to `127.0.0.1` via `requiredLocalEndpoint` to reject LAN injection — do not loosen this.
+- The event server is deliberately pinned to `127.0.0.1` via `requiredLocalEndpoint` to reject LAN injection — do not loosen this. `RemoteActionServer` is the one intentional exception (a separate listener, separate port, token-gated) — don't loosen `EventServer` to achieve the same end.
 - Adding an event type or changing the `/event` JSON contract means updating `EventServer`, `agent-isle-hook.py`, and the event-type table in `README.md` together.

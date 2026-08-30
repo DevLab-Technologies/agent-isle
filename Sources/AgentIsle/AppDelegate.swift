@@ -137,6 +137,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             EventServer.shared?.start()
         }
 
+        // Wire up remote (mobile) approvals — the listener itself only starts on the
+        // first "Approve from phone" tap, so this doesn't open anything yet.
+        RemoteActionServer.shared.attach(to: store)
+
         if demoLaunch {
             store.startDemo()
             store.isExpanded = true

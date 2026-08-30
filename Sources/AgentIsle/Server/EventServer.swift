@@ -18,7 +18,7 @@ final class EventServer {
     /// the copy-command menu item) can read this constant without hopping to the main actor.
     nonisolated static let port: UInt16 = 4711
     static let maxRequestSize = 64 * 1024
-    private static let headerTerminator = Data("\r\n\r\n".utf8)
+    private static let headerTerminator = HTTPFraming.headerTerminator
 
     private let store: SessionStore
     private var listener: NWListener?
@@ -110,28 +110,10 @@ final class EventServer {
         readMore()
     }
 
-    enum RequestLength: Equatable {
-        case incompleteHeaders
-        case complete(Int)
-        case invalid
-    }
+    typealias RequestLength = HTTPFraming.RequestLength
 
     static func requestLength(in data: Data) -> RequestLength {
-        guard let range = data.range(of: headerTerminator) else { return .incompleteHeaders }
-        guard let headers = String(data: data[..<range.lowerBound], encoding: .utf8) else {
-            return .invalid
-        }
-        let contentLength = headers
-            .components(separatedBy: "\r\n")
-            .dropFirst()
-            .first { $0.lowercased().hasPrefix("content-length:") }
-            .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) }
-        let headerLength = data.distance(from: data.startIndex, to: range.upperBound)
-        // Bound before adding: Content-Length of Int.max + headerLength traps and
-        // kills the process, taking every parked permission/question with it.
-        guard let contentLength, contentLength >= 0,
-              contentLength <= maxRequestSize - headerLength else { return .invalid }
-        return .complete(headerLength + contentLength)
+        HTTPFraming.requestLength(in: data, maxRequestSize: maxRequestSize)
     }
 
     private func handleRequest(_ data: Data, on conn: NWConnection) {
