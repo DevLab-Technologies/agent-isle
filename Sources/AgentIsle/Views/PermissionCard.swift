@@ -16,7 +16,6 @@ struct PermissionCard: View {
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.85))
                 Spacer()
-                RemoteApprovalButton(sessionID: session.id)
                 Text(request.toolName)
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundStyle(SessionStatus.waiting.color)
@@ -237,9 +236,8 @@ struct QuestionCard: View {
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(accent.opacity(0.9))
                     .lineLimit(1)
-                Spacer(minLength: 4)
-                RemoteApprovalButton(sessionID: session.id)
                 if question.parts.count > 1 {
+                    Spacer(minLength: 4)
                     Text("\(question.parts.count)")
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                         .foregroundStyle(accent)

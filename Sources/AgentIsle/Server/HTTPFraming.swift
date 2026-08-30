@@ -14,12 +14,19 @@ enum HTTPFraming {
 
     static let headerTerminator = Data("\r\n\r\n".utf8)
 
-    static func requestLength(in data: Data, maxRequestSize: Int) -> RequestLength {
+    /// `requireContentLength` covers `EventServer`'s hook client, which always POSTs a
+    /// JSON body and so always sends the header — a request without one there is
+    /// malformed. `RemoteActionServer` also serves plain `GET`s (the page itself, and its
+    /// poll), which browsers send with no `Content-Length` at all since there's no body;
+    /// passing `false` there treats a missing header as a zero-length body instead of
+    /// rejecting the request outright.
+    static func requestLength(in data: Data, maxRequestSize: Int,
+                              requireContentLength: Bool = true) -> RequestLength {
         guard let range = data.range(of: headerTerminator) else { return .incompleteHeaders }
         guard let headers = String(data: data[..<range.lowerBound], encoding: .utf8) else {
             return .invalid
         }
-        let contentLength = headers
+        let headerContentLength = headers
             .components(separatedBy: "\r\n")
             .dropFirst()
             .first { $0.lowercased().hasPrefix("content-length:") }
@@ -27,7 +34,8 @@ enum HTTPFraming {
         let headerLength = data.distance(from: data.startIndex, to: range.upperBound)
         // Bound before adding: Content-Length of Int.max + headerLength traps and kills
         // the process, taking every parked permission/question with it.
-        guard let contentLength, contentLength >= 0,
+        guard let contentLength = headerContentLength ?? (requireContentLength ? nil : 0),
+              contentLength >= 0,
               contentLength <= maxRequestSize - headerLength else { return .invalid }
         return .complete(headerLength + contentLength)
     }

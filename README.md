@@ -148,17 +148,18 @@ curl -X POST http://localhost:4711/event -H 'Content-Type: application/json' -d 
 
 ## Remote approvals from your phone
 
-When a permission, question, or plan card is showing, tapping the QR icon on the card
-mints a one-time link and shows it as a QR code — scan it to open a small page and
-Allow/Deny, answer, or approve the plan from your phone. No account, app, or backend to
-run: the page is served by Agent Isle itself, over your LAN or over
-[Tailscale](https://tailscale.com) if it's running on both devices (Tailscale just shows
-up as another reachable address — nothing extra to configure here).
+Tap the QR icon in the island's header to pair a phone — scan the code once and a small
+page stays open on it that lists every session with a pending permission, question, or
+plan across all your sessions, live, letting you Allow/Deny, answer, or approve/give
+feedback on any of them as they come up. No account, app, or backend to run: the page is
+served by Agent Isle itself, over your LAN or over [Tailscale](https://tailscale.com) if
+it's running on both devices (Tailscale just shows up as another reachable address —
+nothing extra to configure here).
 
 This is a separate listener from the event server above (`127.0.0.1:4712` vs `:4711`),
-reachable from other devices by design. The security boundary is the link itself: a
-random, single-use token good for ~10 minutes, scoped to that one prompt, offering only
-Allow-Once/Deny (never "Always Allow" or "Bypass") for a permission request. Nothing
+reachable from other devices by design. The security boundary is the pairing link itself:
+a random token good for 24 hours (or until you tap "Disconnect" in the popover), offering
+only Allow-Once/Deny (never "Always Allow" or "Bypass") for a permission request. Nothing
 listens until the first time you tap the QR icon.
 
 ## Voice callouts

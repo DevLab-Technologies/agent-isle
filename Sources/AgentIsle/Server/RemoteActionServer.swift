@@ -8,11 +8,11 @@ struct RemoteAccessLink {
         let url: URL
     }
     let endpoints: [Endpoint]
-    let expiresAt: Date
 }
 
-/// Serves a small mobile-facing page so a pending permission/question/plan prompt can be
-/// approved from a phone — over the LAN or over Tailscale — without any external backend.
+/// Serves a small mobile-facing page so any session's pending permission/question/plan
+/// prompt can be approved from a phone — over the LAN or over Tailscale — without any
+/// external backend.
 ///
 /// Unlike `EventServer` (deliberately pinned to `127.0.0.1`), this listener binds every
 /// interface: reachability from another device is the whole point. Tailscale needs no
@@ -20,26 +20,26 @@ struct RemoteAccessLink {
 /// IP in `100.64.0.0/10`, which `NetworkInterfaces` already detects, so the same listener
 /// serves both the LAN and Tailscale paths.
 ///
-/// The security boundary is the per-prompt token instead of the network binding: a random,
-/// single-use, short-TTL token minted only when the user taps "Approve from phone", scoped
-/// to one session's current prompt, and covering nothing else (three fixed routes, no
-/// listing endpoint). Off until first use — nothing listens until that first tap.
+/// The link is a single standing pairing rather than one per prompt: scanning it once
+/// lets the phone act on *any* session's current or future prompt, not just whatever was
+/// pending at scan time. The security boundary is that pairing token instead of the
+/// network binding — random, revocable from the Mac at any time ("Disconnect"), bounded
+/// by a TTL, and covering only three fixed routes (no listing endpoint beyond the
+/// sessions with something actually pending). The phone is only ever offered
+/// Allow-Once/Deny for a permission — never "Always Allow"/"Bypass" — so a leaked link
+/// can't grant standing auto-approval for a session. Off until first use — nothing
+/// listens until the first tap on "Connect phone".
 @MainActor
 final class RemoteActionServer {
     static let shared = RemoteActionServer()
 
     static let port: UInt16 = 4712
     static let maxRequestSize = 16 * 1024
-    private static let tokenTTL: TimeInterval = 10 * 60
+    private static let tokenTTL: TimeInterval = 24 * 60 * 60
 
     private var listener: NWListener?
     private weak var store: SessionStore?
-
-    private struct TokenEntry {
-        let sessionID: UUID
-        let expiresAt: Date
-    }
-    private var tokens: [String: TokenEntry] = [:]
+    private var activeToken: (token: String, expiresAt: Date)?
 
     private init() {}
 
@@ -47,28 +47,43 @@ final class RemoteActionServer {
         self.store = store
     }
 
-    /// Mint a token for `sessionID`'s current prompt and return the URLs it's reachable
-    /// at. Starts the listener on first call; returns nil if it can't start or no
-    /// interface (LAN/Tailscale) is reachable.
-    func issueLink(sessionID: UUID) -> RemoteAccessLink? {
+    var isConnected: Bool {
+        guard let activeToken else { return false }
+        return activeToken.expiresAt > Date()
+    }
+
+    /// The current pairing link, minting one only if none is active (or the previous one
+    /// expired) — reopening this popover shows the same link rather than silently
+    /// invalidating whatever the phone already scanned. Starts the listener on first
+    /// call; returns nil if it can't start or no interface (LAN/Tailscale) is reachable.
+    func currentLink() -> RemoteAccessLink? {
         guard store != nil else { return nil }
         if listener == nil { start() }
         guard listener != nil else { return nil }
 
+        let token: String
+        if let activeToken, activeToken.expiresAt > Date() {
+            token = activeToken.token
+        } else {
+            token = Self.randomToken()
+            activeToken = (token, Date().addingTimeInterval(Self.tokenTTL))
+        }
+        return link(for: token)
+    }
+
+    /// Revoke the current pairing — the phone's link stops working immediately.
+    func disconnect() {
+        activeToken = nil
+    }
+
+    private func link(for token: String) -> RemoteAccessLink? {
         let addresses = NetworkInterfaces.reachableAddresses()
         guard !addresses.isEmpty else { return nil }
-
-        purgeExpired()
-        let token = Self.randomToken()
-        let expiresAt = Date().addingTimeInterval(Self.tokenTTL)
-        tokens[token] = TokenEntry(sessionID: sessionID, expiresAt: expiresAt)
-
         let endpoints = addresses.compactMap { addr -> RemoteAccessLink.Endpoint? in
             guard let url = URL(string: "http://\(addr.host):\(Self.port)/r/\(token)") else { return nil }
             return RemoteAccessLink.Endpoint(kind: addr.kind, url: url)
         }
-        guard !endpoints.isEmpty else { return nil }
-        return RemoteAccessLink(endpoints: endpoints, expiresAt: expiresAt)
+        return endpoints.isEmpty ? nil : RemoteAccessLink(endpoints: endpoints)
     }
 
     private static func randomToken() -> String {
@@ -78,11 +93,6 @@ final class RemoteActionServer {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-    }
-
-    private func purgeExpired() {
-        let now = Date()
-        tokens = tokens.filter { $0.value.expiresAt > now }
     }
 
     // MARK: - Listener
@@ -129,7 +139,8 @@ final class RemoteActionServer {
                         self.respondBadRequest(conn); return
                     }
 
-                    switch HTTPFraming.requestLength(in: buffer, maxRequestSize: Self.maxRequestSize) {
+                    switch HTTPFraming.requestLength(in: buffer, maxRequestSize: Self.maxRequestSize,
+                                                     requireContentLength: false) {
                     case .incompleteHeaders:
                         if isComplete { self.respondBadRequest(conn) } else { readMore() }
                     case .invalid:
@@ -159,22 +170,23 @@ final class RemoteActionServer {
         guard segments.count >= 2, segments[0] == "r" else { respondNotFound(conn); return }
         let token = segments[1]
         let action = segments.count >= 3 ? segments[2] : nil
-
-        purgeExpired()
-        guard let entry = tokens[token] else { respondGone(conn); return }
         let body = HTTPFraming.body(of: data)
+
+        guard let activeToken, activeToken.token == token, activeToken.expiresAt > Date() else {
+            respondGone(conn); return
+        }
 
         switch (method, action) {
         case ("GET", nil):
             respondHTML(conn)
         case ("GET", "state"):
-            respondState(conn, token: token, sessionID: entry.sessionID)
+            respondState(conn)
         case ("POST", "decision"):
-            handleDecision(body: body, token: token, sessionID: entry.sessionID, conn: conn)
+            handleDecision(body: body, conn: conn)
         case ("POST", "answer"):
-            handleAnswer(body: body, token: token, sessionID: entry.sessionID, conn: conn)
+            handleAnswer(body: body, conn: conn)
         case ("POST", "plan"):
-            handlePlan(body: body, token: token, sessionID: entry.sessionID, conn: conn)
+            handlePlan(body: body, conn: conn)
         default:
             respondNotFound(conn)
         }
@@ -182,72 +194,80 @@ final class RemoteActionServer {
 
     // MARK: - Actions
 
-    private func handleDecision(body: Data, token: String, sessionID: UUID, conn: NWConnection) {
-        guard let store,
-              let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-              let decision = obj["decision"] as? String else { respondBadRequest(conn); return }
+    /// Every action targets an explicit `session` — one pairing link covers every session,
+    /// so the phone's request always says which one it means.
+    private func targetSession(_ obj: [String: Any]?) -> UUID? {
+        (obj?["session"] as? String).flatMap(UUID.init(uuidString:))
+    }
+
+    private func handleDecision(body: Data, conn: NWConnection) {
+        let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        guard let store, let sessionID = targetSession(obj),
+              let decision = obj?["decision"] as? String else { respondBadRequest(conn); return }
         guard store.sessions.first(where: { $0.id == sessionID })?.permission != nil else {
             respondGone(conn); return
         }
         // The phone offers only the two least-consequential decisions — never
-        // "Always"/"Bypass" — so a leaked token can approve/deny one call, not grant
+        // "Always"/"Bypass" — so a leaked link can approve/deny one call, not grant
         // standing auto-approval for the session. Fails closed: anything but an exact
         // "allow" denies, matching `EventServer.reply`'s own fail-closed fallback.
         store.resolvePermission(sessionID: sessionID, decision: decision == "allow" ? .allowOnce : .deny)
-        tokens.removeValue(forKey: token)
         respondJSON(conn, ["ok": true])
     }
 
-    private func handleAnswer(body: Data, token: String, sessionID: UUID, conn: NWConnection) {
-        guard let store,
-              let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-              let text = obj["text"] as? String else { respondBadRequest(conn); return }
+    private func handleAnswer(body: Data, conn: NWConnection) {
+        let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        guard let store, let sessionID = targetSession(obj),
+              let text = obj?["text"] as? String else { respondBadRequest(conn); return }
         guard store.sessions.first(where: { $0.id == sessionID })?.question != nil else {
             respondGone(conn); return
         }
         store.answerQuestion(sessionID: sessionID, answer: text)
-        tokens.removeValue(forKey: token)
         respondJSON(conn, ["ok": true])
     }
 
-    private func handlePlan(body: Data, token: String, sessionID: UUID, conn: NWConnection) {
-        guard let store else { respondBadRequest(conn); return }
+    private func handlePlan(body: Data, conn: NWConnection) {
+        let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        guard let store, let sessionID = targetSession(obj) else { respondBadRequest(conn); return }
         guard store.sessions.first(where: { $0.id == sessionID })?.plan != nil else {
             respondGone(conn); return
         }
-        let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
         let feedback = ((obj?["feedback"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if feedback.isEmpty {
             store.approvePlan(sessionID: sessionID)
         } else {
             store.sendPlanFeedback(sessionID: sessionID, feedback: feedback)
         }
-        tokens.removeValue(forKey: token)
         respondJSON(conn, ["ok": true])
     }
 
-    private func respondState(_ conn: NWConnection, token: String, sessionID: UUID) {
-        guard let store, let session = store.sessions.first(where: { $0.id == sessionID }) else {
-            tokens.removeValue(forKey: token)
-            respondJSON(conn, ["resolved": true]); return
-        }
-        if let p = session.permission {
-            var obj: [String: Any] = ["kind": "permission", "tool": p.toolName]
-            if let command = p.command { obj["command"] = command }
-            if let path = p.filePath { obj["path"] = path }
-            respondJSON(conn, obj)
-        } else if let q = session.question {
-            let parts = q.parts.map { part -> [String: Any] in
-                ["header": part.header, "prompt": part.prompt, "options": part.options,
-                 "multiSelect": part.multiSelect, "allowsOther": part.allowsOther]
+    /// Every session across the store that currently has something to act on — the phone
+    /// polls this rather than one session's state, since one pairing link covers all of
+    /// them. A multi-part question only shows its first part, matching the simplification
+    /// the demo/simple-producer path already makes for this wire format.
+    private func respondState(_ conn: NWConnection) {
+        guard let store else { respondJSON(conn, ["prompts": []]); return }
+        let prompts: [[String: Any]] = store.sessions.compactMap { session in
+            if let p = session.permission {
+                var obj: [String: Any] = ["session": session.id.uuidString, "kind": "permission",
+                                          "title": session.title, "agent": session.agent.displayName,
+                                          "tool": p.toolName]
+                if let command = p.command { obj["command"] = command }
+                if let path = p.filePath { obj["path"] = path }
+                return obj
+            } else if let q = session.question, let part = q.parts.first {
+                return ["session": session.id.uuidString, "kind": "question",
+                       "title": session.title, "agent": session.agent.displayName,
+                       "prompt": part.prompt, "options": part.options,
+                       "allowsOther": part.allowsOther]
+            } else if let plan = session.plan {
+                return ["session": session.id.uuidString, "kind": "plan",
+                       "title": session.title, "agent": session.agent.displayName,
+                       "markdown": plan.markdown]
             }
-            respondJSON(conn, ["kind": "question", "parts": parts])
-        } else if let plan = session.plan {
-            respondJSON(conn, ["kind": "plan", "markdown": plan.markdown])
-        } else {
-            tokens.removeValue(forKey: token)
-            respondJSON(conn, ["resolved": true])
+            return nil
         }
+        respondJSON(conn, ["prompts": prompts])
     }
 
     // MARK: - Responses
@@ -297,7 +317,8 @@ final class RemoteActionServer {
     // MARK: - Mobile page
 
     /// Self-contained HTML/JS — no external assets, matching the app's no-dependency rule.
-    /// Polls `/r/<token>/state` and posts back to `/r/<token>/{decision,answer,plan}`.
+    /// Polls `/r/<token>/state` for the list of sessions with something pending, and posts
+    /// back to `/r/<token>/{decision,answer,plan}` with an explicit `session` id.
     private static let pageHTML = """
     <!doctype html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -308,6 +329,8 @@ final class RemoteActionServer {
              margin:0; padding:20px; }
       h1 { font-size:13px; opacity:.5; text-transform:uppercase; letter-spacing:.08em; margin:0 0 14px; }
       .card { background:#17171a; border-radius:12px; padding:16px; margin-bottom:12px; }
+      .head { font-size:11px; opacity:.55; margin-bottom:6px; }
+      .agent { color:#f5b74d; font-weight:600; }
       .tool { color:#f5b74d; font-weight:600; margin-bottom:6px; }
       pre { white-space:pre-wrap; word-break:break-word; background:#000; padding:10px;
             border-radius:8px; font-size:13px; margin:6px 0 0; }
@@ -318,13 +341,12 @@ final class RemoteActionServer {
       .opt { background:#26262b; color:#eee; text-align:left; }
       textarea { width:100%; box-sizing:border-box; background:#000; color:#eee;
                  border:1px solid #333; border-radius:8px; padding:10px; font-size:15px; margin-top:8px; }
-      .done, .empty { text-align:center; opacity:.6; padding:40px 0; }
+      .empty { text-align:center; opacity:.5; padding:60px 0; font-size:14px; }
     </style></head><body>
     <h1>Agent Isle</h1>
     <div id="root" class="empty">Loading…</div>
     <script>
     const token = location.pathname.split('/')[2];
-    let done = false;
     function esc(s) { return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
     async function post(path, body) {
       try {
@@ -334,50 +356,59 @@ final class RemoteActionServer {
         return r.ok;
       } catch (e) { return false; }
     }
-    function render(state) {
+    function cardHTML(p) {
+      const sid = p.session;
+      const head = `<div class="head"><span class="agent">${esc(p.agent)}</span> · ${esc(p.title)}</div>`;
+      if (p.kind === 'permission') {
+        return `<div class="card">${head}<div class="tool">${esc(p.tool)}</div>` +
+          (p.path ? `<div>${esc(p.path)}</div>` : '') +
+          (p.command ? `<pre>${esc(p.command)}</pre>` : '') +
+          `<button class="allow" onclick="decide('${sid}','allow')">Allow Once</button>` +
+          `<button class="deny" onclick="decide('${sid}','deny')">Deny</button></div>`;
+      }
+      if (p.kind === 'question') {
+        const opts = (p.options || []).map(o =>
+          `<button class="opt" onclick='answer(\"${sid}\", ${JSON.stringify(o)})'>${esc(o)}</button>`).join('');
+        return `<div class="card">${head}<div>${esc(p.prompt)}</div>${opts}` +
+          (p.allowsOther
+            ? `<textarea id="other-${sid}" placeholder="Or type an answer…"></textarea>` +
+              `<button class="opt" onclick="answer('${sid}', document.getElementById('other-${sid}').value)">Send</button>`
+            : '') + `</div>`;
+      }
+      if (p.kind === 'plan') {
+        return `<div class="card">${head}<pre>${esc(p.markdown)}</pre>` +
+          `<button class="allow" onclick="plan('${sid}','')">Approve</button>` +
+          `<textarea id="fb-${sid}" placeholder="Or send feedback…"></textarea>` +
+          `<button class="opt" onclick="plan('${sid}', document.getElementById('fb-${sid}').value)">Send Feedback</button></div>`;
+      }
+      return '';
+    }
+    function render(prompts) {
       const root = document.getElementById('root');
-      if (state.resolved) {
-        root.className = 'done';
-        root.innerHTML = 'Resolved on the Mac.';
-        done = true;
+      if (!prompts.length) {
+        root.className = 'empty';
+        root.innerHTML = 'No pending approvals right now.';
         return;
       }
       root.className = '';
-      if (state.kind === 'permission') {
-        root.innerHTML =
-          `<div class="card"><div class="tool">${esc(state.tool)}</div>` +
-          (state.path ? `<div>${esc(state.path)}</div>` : '') +
-          (state.command ? `<pre>${esc(state.command)}</pre>` : '') +
-          `</div><button class="allow" onclick="decide('allow')">Allow Once</button>` +
-          `<button class="deny" onclick="decide('deny')">Deny</button>`;
-      } else if (state.kind === 'question') {
-        const p = state.parts[0];
-        const opts = p.options.map(o =>
-          `<button class="opt" onclick='answer(${JSON.stringify(o)})'>${esc(o)}</button>`).join('');
-        root.innerHTML = `<div class="card">${esc(p.prompt)}</div>${opts}` +
-          (p.allowsOther
-            ? `<textarea id="other" placeholder="Or type an answer…"></textarea>` +
-              `<button class="opt" onclick="answer(document.getElementById('other').value)">Send</button>`
-            : '');
-      } else if (state.kind === 'plan') {
-        root.innerHTML =
-          `<div class="card"><pre>${esc(state.markdown)}</pre></div>` +
-          `<button class="allow" onclick="plan('')">Approve</button>` +
-          `<textarea id="fb" placeholder="Or send feedback…"></textarea>` +
-          `<button class="opt" onclick="plan(document.getElementById('fb').value)">Send Feedback</button>`;
-      }
+      root.innerHTML = prompts.map(cardHTML).join('');
     }
-    async function decide(d) { if (await post('decision', {decision: d})) poll(); }
-    async function answer(text) { if (!text) return; if (await post('answer', {text})) poll(); }
-    async function plan(feedback) { if (await post('plan', {feedback})) poll(); }
+    async function decide(sid, d) { if (await post('decision', {session: sid, decision: d})) poll(); }
+    async function answer(sid, text) { if (!text) return; if (await post('answer', {session: sid, text})) poll(); }
+    async function plan(sid, feedback) { if (await post('plan', {session: sid, feedback})) poll(); }
     async function poll() {
-      if (done) return;
       try {
         const r = await fetch(`/r/${token}/state`);
-        if (r.status === 410) { render({resolved: true}); return; }
-        render(await r.json());
+        if (r.status === 410) {
+          const root = document.getElementById('root');
+          root.className = 'empty';
+          root.innerHTML = 'This link was disconnected on the Mac.';
+          return;
+        }
+        const data = await r.json();
+        render(data.prompts || []);
       } catch (e) {}
-      if (!done) setTimeout(poll, 2000);
+      setTimeout(poll, 2000);
     }
     poll();
     </script>

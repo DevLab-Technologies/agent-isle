@@ -30,4 +30,24 @@ final class HTTPFramingTests: XCTestCase {
     func testBodyEmptyWithoutHeaderTerminator() {
         XCTAssertEqual(HTTPFraming.body(of: Data("incomplete".utf8)), Data())
     }
+
+    // MARK: - requireContentLength: false (RemoteActionServer's GETs, no request body)
+
+    func testMissingContentLengthInvalidByDefault() {
+        let data = httpRequest("GET /r/abc123/state HTTP/1.1", headers: ["Host: 1.2.3.4"])
+        XCTAssertEqual(HTTPFraming.requestLength(in: data, maxRequestSize: 4096), .invalid)
+    }
+
+    func testMissingContentLengthTreatedAsZeroWhenNotRequired() {
+        let data = httpRequest("GET /r/abc123/state HTTP/1.1", headers: ["Host: 1.2.3.4"])
+        XCTAssertEqual(HTTPFraming.requestLength(in: data, maxRequestSize: 4096, requireContentLength: false),
+                      .complete(data.count))
+    }
+
+    func testExplicitContentLengthStillHonoredWhenNotRequired() {
+        let body = #"{"decision":"allow"}"#
+        let data = httpRequest("POST /r/abc123/decision HTTP/1.1", body: body)
+        XCTAssertEqual(HTTPFraming.requestLength(in: data, maxRequestSize: 4096, requireContentLength: false),
+                      .complete(data.count))
+    }
 }
