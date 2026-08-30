@@ -146,6 +146,68 @@ curl -X POST http://localhost:4711/event -H 'Content-Type: application/json' -d 
 | `done`       | Mark the session finished.                                        |
 | `remove`     | Drop the session.                                                 |
 
+## Remote approvals from your phone
+
+Tap the QR icon in the island's header to pair a phone — scan the code once and a small
+page stays open on it that mirrors the island itself: every session, live, with its
+status, model, running token total, and task list (so a session between tool calls
+doesn't read as "Idle" with no context), and an Allow/Deny, answer, or approve/feedback
+card inline for whichever ones have a permission, question, or plan pending. Tap "Chat →"
+on any session for its full conversation — read the same way the in-app chat view does,
+with thinking/tool-calls/tool-results styled distinctly from plain replies (not flattened
+into one paragraph), timestamps, sent/received messages styled distinctly, and a message
+box to send your own into the session (📷 sends a photo — it's saved to
+`~/.agent-isle/uploads/` and delivered as a "Image attached: &lt;path&gt;" message, since a
+terminal-based agent has no generic image-attachment channel the way a chat app does) —
+all fixed in place (header and composer stay put; only the messages scroll) so you never
+lose your place reaching Back or Send. No account, app, or backend to run: the page is
+served by Agent Isle itself, over your LAN or over [Tailscale](https://tailscale.com) if
+it's running on both devices (Tailscale just shows up as another reachable address —
+nothing extra to configure here).
+
+When Tailscale's ["HTTPS Certificates"](https://tailscale.com/kb/1153/enabling-https)
+feature is on for your tailnet, the Tailscale link is served over real HTTPS
+automatically — Agent Isle fetches a Let's Encrypt cert for the Mac's MagicDNS name via
+`tailscale cert` (a real network round trip the first time, ~20–30s; cached and reused
+after that, renewed a week before its ~90-day expiry) and serves TLS from a second
+listener (`:4713`). This is what makes the "needs HTTPS" notification limitation moot
+over Tailscale specifically, and removes the browser's "Not Secure" warning. Nothing to
+configure on the Agent Isle side; if Tailscale isn't installed or that feature isn't
+enabled, the Tailscale link just stays plain HTTP, same as before this existed.
+
+Per-command elapsed time and per-command token cost aren't shown — the app doesn't track
+either anywhere today (not even on macOS), so surfacing them would need new
+instrumentation, not just a page change; total session tokens are shown instead.
+
+The popover offers two links when both are reachable: **Same Network** only works while
+the phone is on the same Wi-Fi as the Mac; **Tailscale** works from anywhere, including
+away from home, as long as Tailscale is on for both devices — that's the one to use if
+you want this to work while you're out. The pairing itself (the token in the link)
+persists across an app restart or update and is good for 30 days, so it stays reachable
+without a rescan unless you tap "Disconnect" — only the network you're on decides whether
+either link can actually reach the Mac at that moment.
+
+Don't want to scan a QR code? "Copy Link" puts the current one on the clipboard, and
+"Share…" opens the normal macOS share sheet (Messages, AirDrop, Mail, …) for it.
+
+Tap the bell at the top of the page to ask the phone's browser for notification
+permission — it'll then notify you when a session starts needing you, or finishes,
+without having to keep checking. This needs the page to be loaded over HTTPS (the
+Tailscale link, once the automatic-cert setup above has kicked in — plain HTTP, including
+"Same Network", can't use it at all). This rides the plain browser `Notification` API off
+the same poll the page already does, so it only fires while the page is open (foreground,
+or briefly backgrounded) — it is not push, and won't wake the phone from locked or the tab
+fully closed. On iPhone, Safari also requires the page be added to the Home Screen before
+notifications work at all. True background push would need HTTPS, a Home
+Screen–installed PWA, and the Web Push protocol implemented Mac-side — a bigger lift than
+what's here today.
+
+This is a separate listener from the event server above (`127.0.0.1:4712` vs `:4711`),
+reachable from other devices by design. The security boundary is the pairing link itself:
+a random token good for 24 hours (or until you tap "Disconnect" in the popover), offering
+only Allow-Once/Deny (never "Always Allow" or "Bypass") for a permission request. Nothing
+listens until the first time you tap the QR icon.
+
 ## Voice callouts
 
 Agent Isle can speak a short line when an agent finishes a turn or needs a decision —
