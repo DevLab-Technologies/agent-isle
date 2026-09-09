@@ -549,9 +549,9 @@ final class RemoteActionServer {
     }
 
     /// Send a free-form message into a session's terminal — the same best-effort delivery
-    /// `SessionChatView`'s composer uses on macOS (typed into the host app; not confirmed
-    /// delivered). Unlike the other actions this isn't answering a specific prompt, so it
-    /// has no pending-state guard: any session can be messaged at any time.
+    /// `SessionChatView`'s composer uses on macOS (typed into the host app). Unlike the other
+    /// actions this isn't answering a specific prompt, so it has no pending-state guard: any
+    /// session can be messaged at any time.
     private func handleMessage(body: Data, conn: NWConnection) {
         let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
         guard let store, let sessionID = targetSession(obj), let text = obj?["text"] as? String,
@@ -559,7 +559,7 @@ final class RemoteActionServer {
             respondBadRequest(conn); return
         }
         store.sendMessage(text, to: session)
-        respondJSON(conn, ["ok": true])
+        respondAfterDelivery(store, sessionID: sessionID, conn: conn)
     }
 
     /// Saves an uploaded image to disk and sends a message referencing its path — there's
@@ -578,7 +578,29 @@ final class RemoteActionServer {
         let fileURL = Self.uploadsDirectory.appendingPathComponent("photo-\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)")
         guard (try? imageData.write(to: fileURL)) != nil else { respondBadRequest(conn); return }
         store.sendMessage("Image attached: \(fileURL.path)", to: session)
-        respondJSON(conn, ["ok": true])
+        respondAfterDelivery(store, sessionID: sessionID, conn: conn)
+    }
+
+    /// `sendMessage` above delivers asynchronously (it may need to bring the target app
+    /// forward and wait up to ~1.5s for it to become frontmost before actually typing), so
+    /// responding immediately would always report success regardless of the real outcome —
+    /// invisible on the phone even though the exact same failure shows a notice on the Mac.
+    /// That gap matters specifically for phone-triggered sends: the target app is very likely
+    /// not already frontmost (unlike testing from the Mac itself), making delivery failures
+    /// more likely right when there'd be no other way to notice them. Waits long enough to
+    /// cover that focus timeout plus the actual send, then reports whatever `SessionStore`
+    /// recorded — reusing the same error state `SessionChatView`'s notice already reads from.
+    private func respondAfterDelivery(_ store: SessionStore, sessionID: UUID, conn: NWConnection) {
+        let sentAt = Date()
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
+            guard let self else { return }
+            if let error = store.sendError(for: sessionID), error.reportedAt > sentAt {
+                self.respondJSON(conn, ["ok": false, "error": error.message])
+            } else {
+                self.respondJSON(conn, ["ok": true])
+            }
+        }
     }
 
     nonisolated private static let uploadsDirectory: URL = {
@@ -838,6 +860,9 @@ final class RemoteActionServer {
                          border-radius:20px; background:#5cd48c; color:#000; font-size:14px; }
       .composer button.attach { padding:0 10px; background:#26262b; font-size:18px; }
       .composer button.attach:disabled { opacity:.5; }
+      .composerError { flex:0 0 auto; padding:0 12px 6px; font-size:12.5px; color:#ff6b6b;
+                        background:#0b0b0d; display:none; }
+      .composerError.show { display:block; }
     </style></head><body>
     <h1>Agent Isle
       <button class="bell" id="bell" onclick="toggleNotifications()">
@@ -858,6 +883,7 @@ final class RemoteActionServer {
         <span class="histTitle" id="historyTitle"></span>
       </div>
       <div id="historyBody"></div>
+      <div class="composerError" id="composerError"></div>
       <div class="composer">
         <button class="attach" onclick="document.getElementById('imagePicker').click()">📷</button>
         <input type="file" id="imagePicker" accept="image/*" style="display:none" onchange="sendChatImage(this)">
@@ -874,13 +900,22 @@ final class RemoteActionServer {
     // text containing an apostrophe (e.g. "Don't deploy") can't break out of the attribute.
     function escAttr(s) { return (s||'').replace(/[&<>'"]/g,
       c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+    // Returns the parsed response body (always has at least `.ok`), never the raw boolean —
+    // callers that only care about success check `.ok`; `message`/`image` also read `.error`
+    // when present, so a real delivery failure (not just a network/HTTP failure) can surface.
     async function post(path, body) {
       try {
         const r = await fetch(`/r/${token}/${path}`, {
           method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})
         });
-        return r.ok;
-      } catch (e) { return false; }
+        if (!r.ok) return {ok: false};
+        return await r.json().catch(() => ({ok: true}));
+      } catch (e) { return {ok: false}; }
+    }
+    function showComposerError(msg) {
+      const el = document.getElementById('composerError');
+      el.textContent = msg || '';
+      el.className = msg ? 'composerError show' : 'composerError';
     }
     function notify(title, body) {
       if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -1008,6 +1043,7 @@ final class RemoteActionServer {
       document.getElementById('overlay').style.display = 'flex';
       document.getElementById('historyBody').innerHTML = '<div class="empty">Loading…</div>';
       document.getElementById('composerInput').value = '';
+      showComposerError('');
       updateHistoryHeader();
       await loadHistory();
     }
@@ -1029,9 +1065,13 @@ final class RemoteActionServer {
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
-      await post('message', {session: historySession, text});
-      // Best-effort delivery (typed into the host terminal, same as the macOS composer) —
-      // no confirmed echo, so the sent text only reappears once the transcript picks it up.
+      showComposerError('');
+      const result = await post('message', {session: historySession, text});
+      // Best-effort delivery (typed into the host terminal, same as the macOS composer) — no
+      // confirmed echo in the transcript itself, but the Mac reports whether the attempt to
+      // type it in actually succeeded (e.g. it could bring the terminal forward in time), so
+      // a real delivery failure — not just a network failure — is shown here.
+      if (!result.ok) showComposerError(result.error || 'Could not send.');
       await loadHistory();
     }
     function readFileAsDataURL(file) {
@@ -1048,11 +1088,13 @@ final class RemoteActionServer {
       const attachBtn = document.querySelector('.composer .attach');
       attachBtn.disabled = true;
       attachBtn.textContent = '…';
+      showComposerError('');
       try {
         const dataURL = await readFileAsDataURL(file);
         const comma = dataURL.indexOf(',');
         const base64 = dataURL.slice(comma + 1);
-        await post('image', {session: historySession, data: base64, mime: file.type});
+        const result = await post('image', {session: historySession, data: base64, mime: file.type});
+        if (!result.ok) showComposerError(result.error || 'Could not send.');
         await loadHistory();
       } catch (e) {} finally {
         input.value = '';
@@ -1122,9 +1164,9 @@ final class RemoteActionServer {
       }
     }
     let firstLoad = true;
-    async function decide(sid, d) { if (await post('decision', {session: sid, decision: d})) poll(); }
-    async function answer(sid, text) { if (!text) return; if (await post('answer', {session: sid, text})) poll(); }
-    async function plan(sid, feedback) { if (await post('plan', {session: sid, feedback})) poll(); }
+    async function decide(sid, d) { if ((await post('decision', {session: sid, decision: d})).ok) poll(); }
+    async function answer(sid, text) { if (!text) return; if ((await post('answer', {session: sid, text})).ok) poll(); }
+    async function plan(sid, feedback) { if ((await post('plan', {session: sid, feedback})).ok) poll(); }
     async function poll() {
       try {
         const r = await fetch(`/r/${token}/state`);
