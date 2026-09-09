@@ -199,6 +199,14 @@ final class RemoteActionServer {
         tailscaleSetupStarted = false
     }
 
+    /// Whether a Tailscale HTTPS setup attempt started at `generation` has since been
+    /// superseded by a disconnect() (which bumps `tailscaleGeneration`) — checked from a
+    /// background task right before it touches the keychain, since that work can't be
+    /// cancelled once started.
+    private func isStaleTailscaleAttempt(generation: Int) -> Bool {
+        generation != tailscaleGeneration
+    }
+
     private struct PreparedCert {
         let certPEM: String
         let keyPEM: String
@@ -229,18 +237,15 @@ final class RemoteActionServer {
                 // started: a disconnect() while this attempt was blocked in the network
                 // round trip above means the result is stale and must not touch the
                 // currently-live keychain file or reopen a listener the user just closed.
-                let (isStale, keepActive) = await MainActor.run {
-                    (generation != RemoteActionServer.shared.tailscaleGeneration,
-                     RemoteActionServer.shared.activeKeychainFileName)
-                }
-                guard !isStale else { return nil }
-                guard let (identity, fileName) = TLSIdentity.make(certPEM: prepared.certPEM, keyPEM: prepared.keyPEM,
-                                                                  in: tlsDirectory, keepingActive: keepActive) else {
+                guard await !RemoteActionServer.shared.isStaleTailscaleAttempt(generation: generation) else { return nil }
+                let keepActive = await RemoteActionServer.shared.activeKeychainFileName
+                guard let made = TLSIdentity.make(certPEM: prepared.certPEM, keyPEM: prepared.keyPEM,
+                                                  in: tlsDirectory, keepingActive: keepActive) else {
                     NSLog("RemoteActionServer: couldn't build a TLS identity from the Tailscale cert")
                     return nil
                 }
-                return HTTPSSetup(identity: identity, dnsName: prepared.dnsName, expiresAt: prepared.expiresAt,
-                                  keychainFileName: fileName)
+                return HTTPSSetup(identity: made.identity, dnsName: prepared.dnsName, expiresAt: prepared.expiresAt,
+                                  keychainFileName: made.fileName)
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: 45 * 1_000_000_000)

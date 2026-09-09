@@ -8,6 +8,13 @@ import Network
 /// (via `openssl`, present on every Mac) and import that into a small dedicated keychain —
 /// never the user's login keychain — via `SecPKCS12Import`.
 enum TLSIdentity {
+    /// A built identity plus the name of the keychain file backing it, so the caller can
+    /// remember which file is currently live (see `keepingActive` below).
+    struct Made {
+        let identity: sec_identity_t
+        let fileName: String
+    }
+
     /// Builds a `sec_identity_t` from a PEM cert+key pair, backed by a fresh keychain file
     /// under `directory` that must persist for as long as the returned identity is in use
     /// (Network.framework holds a reference into it, not a copy) — call this once per
@@ -18,7 +25,7 @@ enum TLSIdentity {
     /// can still reach this call after a newer attempt has already succeeded and is
     /// actively serving TLS from its own keychain file.
     static func make(certPEM: String, keyPEM: String, in directory: URL,
-                      keepingActive activeFileName: String? = nil) -> (identity: sec_identity_t, fileName: String)? {
+                      keepingActive activeFileName: String? = nil) -> Made? {
         sweepStaleKeychains(in: directory, keeping: activeFileName)
         guard let p12Data = pkcs12(certPEM: certPEM, keyPEM: keyPEM, passphrase: passphrase) else { return nil }
 
@@ -51,7 +58,7 @@ enum TLSIdentity {
               let identity = first[kSecImportItemIdentity as String] else { return nil }
 
         guard let secIdentity = sec_identity_create(identity as! SecIdentity) else { return nil }
-        return (secIdentity, fileName)
+        return Made(identity: secIdentity, fileName: fileName)
     }
 
     // Protects the ephemeral keychain file for the moment it exists on disk — not a
