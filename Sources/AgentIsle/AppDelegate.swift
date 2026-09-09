@@ -720,8 +720,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func copyHookCommand() {
+        let token = EventAuthToken.loadOrCreate()
         let cmd = "curl -s -X POST http://localhost:\(EventServer.port)/event " +
-                  "-H 'Content-Type: application/json' -d @-"
+                  "-H 'Content-Type: application/json' " +
+                  "-H 'X-Agent-Isle-Token: \(token)' -d @-"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cmd, forType: .string)
     }
