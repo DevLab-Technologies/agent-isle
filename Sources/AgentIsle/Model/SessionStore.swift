@@ -351,6 +351,11 @@ final class SessionStore: ObservableObject {
         hoverExpandedWork?.cancel()
         hoverExpandedWork = nil
         hoverExpanded = false
+        // Collapsing tears down ExpandedIsland (and any popover anchored to a view inside
+        // it, e.g. the remote-approval QR popover) before that popover's own `onChange`
+        // ever fires false — without this, `popoverActive` is left stuck true and
+        // NotchWindow keeps forcing hover state on forever.
+        popoverActive = false
     }
 
     /// Start (or switch) the tailer if the session has a transcript we aren't already

@@ -204,7 +204,7 @@ what's here today.
 
 This is a separate listener from the event server above (`127.0.0.1:4712` vs `:4711`),
 reachable from other devices by design. The security boundary is the pairing link itself:
-a random token good for 24 hours (or until you tap "Disconnect" in the popover), offering
+a random token good for 30 days (or until you tap "Disconnect" in the popover), offering
 only Allow-Once/Deny (never "Always Allow" or "Bypass") for a permission request. Nothing
 listens until the first time you tap the QR icon.
 

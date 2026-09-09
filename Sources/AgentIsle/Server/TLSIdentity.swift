@@ -13,15 +13,35 @@ enum TLSIdentity {
     /// (Network.framework holds a reference into it, not a copy) — call this once per
     /// listener start, not per request. Stale keychain files from earlier calls (e.g. a
     /// prior app launch) are swept first so they don't accumulate forever.
-    static func make(certPEM: String, keyPEM: String, in directory: URL) -> sec_identity_t? {
-        sweepStaleKeychains(in: directory)
+    /// `keepingActive` names a keychain file (as returned in a prior call's result) that
+    /// must survive the stale-file sweep below — needed because a superseded setup attempt
+    /// can still reach this call after a newer attempt has already succeeded and is
+    /// actively serving TLS from its own keychain file.
+    static func make(certPEM: String, keyPEM: String, in directory: URL,
+                      keepingActive activeFileName: String? = nil) -> (identity: sec_identity_t, fileName: String)? {
+        sweepStaleKeychains(in: directory, keeping: activeFileName)
         guard let p12Data = pkcs12(certPEM: certPEM, keyPEM: keyPEM, passphrase: passphrase) else { return nil }
 
-        let keychainPath = directory.appendingPathComponent("remote-tls-\(UUID().uuidString).keychain-db").path
+        let fileName = "remote-tls-\(UUID().uuidString).keychain-db"
+        let keychainPath = directory.appendingPathComponent(fileName).path
         var keychain: SecKeychain?
         guard SecKeychainCreate(keychainPath, UInt32(passphrase.utf8.count), passphrase,
                                 false, nil, &keychain) == errSecSuccess,
               let kc = keychain else { return nil }
+
+        // Creating the keychain doesn't reliably leave it unlocked for this process —
+        // without this, importing into it (or later, TLS actually signing with the
+        // imported key) can fall back to an interactive "enter the keychain password"
+        // prompt, which nobody can ever answer correctly since `passphrase` is a random
+        // value generated in-process and never shown to anyone. Also disable auto-lock
+        // entirely, so a later sleep/idle period can't cause the same prompt to resurface
+        // mid-session while the HTTPS listener is still using this identity.
+        guard SecKeychainUnlock(kc, UInt32(passphrase.utf8.count), passphrase, true) == errSecSuccess
+        else { return nil }
+        var noAutoLock = SecKeychainSettings(version: UInt32(SEC_KEYCHAIN_SETTINGS_VERS1),
+                                             lockOnSleep: false, useLockInterval: true,
+                                             lockInterval: UInt32.max)
+        SecKeychainSetSettings(kc, &noAutoLock)
 
         let options: [String: Any] = [kSecImportExportPassphrase as String: passphrase,
                                       kSecImportExportKeychain as String: kc]
@@ -30,7 +50,8 @@ enum TLSIdentity {
               let items = rawItems as? [[String: Any]], let first = items.first,
               let identity = first[kSecImportItemIdentity as String] else { return nil }
 
-        return sec_identity_create(identity as! SecIdentity)
+        guard let secIdentity = sec_identity_create(identity as! SecIdentity) else { return nil }
+        return (secIdentity, fileName)
     }
 
     // Protects the ephemeral keychain file for the moment it exists on disk — not a
@@ -38,9 +59,10 @@ enum TLSIdentity {
     // needs to reopen an old keychain file since `make` always builds a new one.
     private static let passphrase = UUID().uuidString
 
-    private static func sweepStaleKeychains(in directory: URL) {
+    private static func sweepStaleKeychains(in directory: URL, keeping activeFileName: String?) {
         guard let contents = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
-        for name in contents where name.hasPrefix("remote-tls-") && name.hasSuffix(".keychain-db") {
+        for name in contents where name.hasPrefix("remote-tls-") && name.hasSuffix(".keychain-db")
+            && name != activeFileName {
             try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
         }
     }

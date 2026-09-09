@@ -61,6 +61,17 @@ final class RemoteActionServer {
     private var httpsListener: NWListener?
     private var tailscaleHTTPS: (dnsName: String, expiresAt: Date)?
     private var tailscaleSetupStarted = false
+    // Bumped by disconnect() so a Tailscale HTTPS setup attempt still in flight when the
+    // user disconnects can recognize it's been superseded and discard its result instead
+    // of reopening a listener the user just closed.
+    private var tailscaleGeneration = 0
+    // The keychain file backing the currently-live HTTPS identity, if any — passed to
+    // TLSIdentity.make so a stale, still-running setup attempt's cleanup sweep never
+    // deletes the file a newer, already-succeeded attempt is actively serving TLS from.
+    private var activeKeychainFileName: String?
+    // Keyed by session, so a poll that finds nothing new (the common case) can skip
+    // re-reading/re-parsing the transcript entirely instead of doing it every 2s.
+    private var historyCache: [UUID: (mtime: Date, out: [[String: Any]])] = [:]
     private weak var store: SessionStore?
     private var activeToken: (token: String, expiresAt: Date)? {
         didSet { persistToken() }
@@ -94,6 +105,10 @@ final class RemoteActionServer {
         guard store != nil else { return nil }
         if listener == nil { start() }
         guard listener != nil else { return nil }
+        // Reopening this popover is the natural moment to retry Tailscale HTTPS if an
+        // earlier attempt timed out — start() only reaches this when the listener itself
+        // was down, which isn't why HTTPS setup would have failed.
+        setUpTailscaleHTTPSIfNeeded()
 
         let token: String
         if let activeToken, activeToken.expiresAt > Date() {
@@ -105,9 +120,19 @@ final class RemoteActionServer {
         return link(for: token)
     }
 
-    /// Revoke the current pairing — the phone's link stops working immediately.
+    /// Revoke the current pairing — the phone's link stops working immediately, and the
+    /// listeners themselves are torn down rather than left open on the LAN/Tailscale with
+    /// nothing valid to serve.
     func disconnect() {
         activeToken = nil
+        listener?.cancel()
+        listener = nil
+        httpsListener?.cancel()
+        httpsListener = nil
+        tailscaleHTTPS = nil
+        tailscaleSetupStarted = false
+        activeKeychainFileName = nil
+        tailscaleGeneration += 1
     }
 
     private static func loadPersistedToken() -> (token: String, expiresAt: Date)? {
@@ -157,10 +182,21 @@ final class RemoteActionServer {
     private func setUpTailscaleHTTPSIfNeeded() {
         guard !tailscaleSetupStarted else { return }
         tailscaleSetupStarted = true
+        let generation = tailscaleGeneration
         Task.detached(priority: .utility) { [weak self] in
-            guard let prepared = Self.prepareTailscaleHTTPS() else { return }
-            await self?.startHTTPSListener(prepared)
+            guard let result = await Self.buildTailscaleHTTPSSetup(generation: generation) else {
+                // Setup failed, hit the timeout, or was superseded by a disconnect — let a
+                // later call try again instead of leaving this stuck true (and the feature
+                // silently dead) for the rest of the launch.
+                await self?.resetTailscaleSetupStarted()
+                return
+            }
+            await self?.startHTTPSListener(result, generation: generation)
         }
+    }
+
+    private func resetTailscaleSetupStarted() {
+        tailscaleSetupStarted = false
     }
 
     private struct PreparedCert {
@@ -170,9 +206,54 @@ final class RemoteActionServer {
         let expiresAt: Date
     }
 
-    /// Runs entirely off the main actor (called from a detached `Task`): reuses a cached
-    /// cert from a prior launch if it's still comfortably valid, otherwise fetches or
-    /// renews one via `TailscaleCert` — the slow path.
+    private struct HTTPSSetup: @unchecked Sendable {
+        let identity: sec_identity_t
+        let dnsName: String
+        let expiresAt: Date
+        let keychainFileName: String
+    }
+
+    /// Runs entirely off the main actor, bounded by an overall timeout: fetches/caches the
+    /// Tailscale cert AND builds the keychain-backed TLS identity from it — both
+    /// potentially slow (a real network round trip for the cert; the keychain import can,
+    /// in principle, block on an interactive OS prompt) — so this must never run on the
+    /// main actor, where blocking would freeze the whole app rather than just leaving this
+    /// one feature unavailable. If the timeout wins, the stuck task is abandoned (Swift
+    /// concurrency can't preempt a blocked system call) but the app itself stays responsive,
+    /// and the Tailscale link just stays plain HTTP, same as if this had failed outright.
+    nonisolated private static func buildTailscaleHTTPSSetup(generation: Int) async -> HTTPSSetup? {
+        await withTaskGroup(of: HTTPSSetup?.self) { group -> HTTPSSetup? in
+            group.addTask {
+                guard let prepared = prepareTailscaleHTTPS() else { return nil }
+                // Re-check right before the keychain work, which can't be cancelled once
+                // started: a disconnect() while this attempt was blocked in the network
+                // round trip above means the result is stale and must not touch the
+                // currently-live keychain file or reopen a listener the user just closed.
+                let (isStale, keepActive) = await MainActor.run {
+                    (generation != RemoteActionServer.shared.tailscaleGeneration,
+                     RemoteActionServer.shared.activeKeychainFileName)
+                }
+                guard !isStale else { return nil }
+                guard let (identity, fileName) = TLSIdentity.make(certPEM: prepared.certPEM, keyPEM: prepared.keyPEM,
+                                                                  in: tlsDirectory, keepingActive: keepActive) else {
+                    NSLog("RemoteActionServer: couldn't build a TLS identity from the Tailscale cert")
+                    return nil
+                }
+                return HTTPSSetup(identity: identity, dnsName: prepared.dnsName, expiresAt: prepared.expiresAt,
+                                  keychainFileName: fileName)
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 45 * 1_000_000_000)
+                return nil
+            }
+            let result = await group.next()
+            group.cancelAll()
+            return result ?? nil
+        }
+    }
+
+    /// Reuses a cached cert from a prior launch if it's still comfortably valid, otherwise
+    /// fetches or renews one via `TailscaleCert` — the slow path.
     nonisolated private static func prepareTailscaleHTTPS() -> PreparedCert? {
         guard let dnsName = TailscaleCert.magicDNSName() else { return nil }
         let certPath = tlsDirectory.appendingPathComponent("cert.pem")
@@ -193,25 +274,26 @@ final class RemoteActionServer {
         return PreparedCert(certPEM: cert.certPEM, keyPEM: cert.keyPEM, dnsName: cert.dnsName, expiresAt: cert.expiresAt)
     }
 
-    private func startHTTPSListener(_ prepared: PreparedCert) {
+    private func startHTTPSListener(_ setup: HTTPSSetup, generation: Int) {
+        // Superseded by a disconnect() since this attempt started — discard the result
+        // rather than reopening a listener the user just explicitly closed.
+        guard generation == tailscaleGeneration else { return }
         guard httpsListener == nil else {
-            tailscaleHTTPS = (prepared.dnsName, prepared.expiresAt)
-            return
-        }
-        guard let identity = TLSIdentity.make(certPEM: prepared.certPEM, keyPEM: prepared.keyPEM,
-                                              in: Self.tlsDirectory) else {
-            NSLog("RemoteActionServer: couldn't build a TLS identity from the Tailscale cert")
+            tailscaleHTTPS = (setup.dnsName, setup.expiresAt)
             return
         }
         let tlsOptions = NWProtocolTLS.Options()
-        sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, identity)
+        sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, setup.identity)
         let params = NWParameters(tls: tlsOptions, tcp: .init())
         params.allowLocalEndpointReuse = true
         do {
             let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: Self.httpsPort)!)
-            listener.stateUpdateHandler = { state in
+            listener.stateUpdateHandler = { [weak self] state in
                 if case .failed(let error) = state {
                     NSLog("RemoteActionServer HTTPS failed: \(error)")
+                    // Mirrors the plain listener's fix — without this, a dead-but-non-nil
+                    // httpsListener would permanently no-op every future rebind attempt.
+                    Task { @MainActor in self?.httpsListener = nil }
                 }
             }
             listener.newConnectionHandler = { [weak self] conn in
@@ -223,8 +305,9 @@ final class RemoteActionServer {
             }
             listener.start(queue: .main)
             self.httpsListener = listener
-            self.tailscaleHTTPS = (prepared.dnsName, prepared.expiresAt)
-            NSLog("RemoteActionServer HTTPS listening on :\(Self.httpsPort) for \(prepared.dnsName)")
+            self.tailscaleHTTPS = (setup.dnsName, setup.expiresAt)
+            self.activeKeychainFileName = setup.keychainFileName
+            NSLog("RemoteActionServer HTTPS listening on :\(Self.httpsPort) for \(setup.dnsName)")
         } catch {
             NSLog("RemoteActionServer HTTPS could not start: \(error)")
         }
@@ -247,9 +330,14 @@ final class RemoteActionServer {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
             let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: Self.port)!)
-            listener.stateUpdateHandler = { state in
+            listener.stateUpdateHandler = { [weak self] state in
                 if case .failed(let error) = state {
                     NSLog("RemoteActionServer failed: \(error)")
+                    // The bind can fail asynchronously (e.g. the port's already in use) well
+                    // after this listener was already stashed in self.listener — clear it so
+                    // a later start() (via currentLink()) actually retries instead of seeing
+                    // a non-nil-but-dead listener forever.
+                    Task { @MainActor in self?.listener = nil }
                 }
             }
             listener.newConnectionHandler = { [weak self] conn in
@@ -262,10 +350,10 @@ final class RemoteActionServer {
             listener.start(queue: .main)
             self.listener = listener
             NSLog("RemoteActionServer listening on :\(Self.port)")
+            setUpTailscaleHTTPSIfNeeded()
         } catch {
             NSLog("RemoteActionServer could not start: \(error)")
         }
-        setUpTailscaleHTTPSIfNeeded()
     }
 
     // MARK: - Request handling
@@ -455,6 +543,11 @@ final class RemoteActionServer {
     /// demo/simple-producer path already makes for this wire format.
     private func respondState(_ conn: NWConnection) {
         guard let store else { respondJSON(conn, ["sessions": []]); return }
+        // The state route is polled every ~2s regardless of whether history is open, so
+        // it's a natural place to evict cache entries for sessions that no longer exist —
+        // otherwise historyCache grows without bound for the life of the process.
+        let liveIDs = Set(store.sessions.map(\.id))
+        historyCache = historyCache.filter { liveIDs.contains($0.key) }
         let sessions: [[String: Any]] = store.sessions.map { session in
             var obj: [String: Any] = ["session": session.id.uuidString,
                                       "title": session.title,
@@ -502,14 +595,27 @@ final class RemoteActionServer {
         guard ChatHistory.isSupported(session.agent), let url = session.transcriptURL else {
             respondJSON(conn, ["messages": [], "unsupported": true]); return
         }
-        let messages = ChatHistory.messages(for: session.agent, url: url).filter { !$0.isEmpty }
-        let out = messages.map { message -> [String: Any] in
-            var obj: [String: Any] = ["role": message.role == .user ? "user" : "assistant",
-                                      "blocks": Self.encode(message.blocks)]
-            if let ts = message.timestamp { obj["timestamp"] = ts.timeIntervalSince1970 * 1000 }
-            return obj
+        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        if let cached = historyCache[sessionID], cached.mtime == mtime {
+            respondJSON(conn, ["messages": cached.out, "tokens": session.tokens])
+            return
         }
-        respondJSON(conn, ["messages": out, "tokens": session.tokens])
+        let agent = session.agent
+        let tokens = session.tokens
+        Task { [weak self] in
+            // Off the main actor, same as TranscriptTailer does for the same transcript
+            // data on the macOS side — parsing can be non-trivial for a large transcript.
+            let messages = await Task.detached { ChatHistory.messages(for: agent, url: url) }.value
+            guard let self else { return }
+            let out = messages.filter { !$0.isEmpty }.map { message -> [String: Any] in
+                var obj: [String: Any] = ["role": message.role == .user ? "user" : "assistant",
+                                          "blocks": Self.encode(message.blocks)]
+                if let ts = message.timestamp { obj["timestamp"] = ts.timeIntervalSince1970 * 1000 }
+                return obj
+            }
+            self.historyCache[sessionID] = (mtime, out)
+            self.respondJSON(conn, ["messages": out, "tokens": tokens])
+        }
     }
 
     /// Keeps each block's kind rather than flattening to plain text, so the mobile page
@@ -599,8 +705,12 @@ final class RemoteActionServer {
       h1 { font-size:13px; opacity:.5; text-transform:uppercase; letter-spacing:.08em; margin:0 0 14px;
            display:flex; align-items:center; justify-content:space-between; }
       .bell { background:none; border:none; color:#5cd48c; font:inherit; text-transform:none;
-              letter-spacing:normal; padding:0; width:auto; margin:0; display:inline; }
+              letter-spacing:normal; padding:0; width:auto; margin:0;
+              display:inline-flex; align-items:center; gap:5px; }
       .bell.muted { color:#666; }
+      .bellIcon { flex:0 0 auto; }
+      .bellSlash { display:none; }
+      .bell.muted .bellSlash { display:inline; }
       .row { background:#17171a; border-radius:12px; padding:14px 16px; margin-bottom:10px;
              display:flex; flex-direction:column; gap:2px; }
       .card { background:#17171a; border-radius:12px; padding:16px; margin-bottom:12px; }
@@ -664,7 +774,17 @@ final class RemoteActionServer {
       .composer button.attach { padding:0 10px; background:#26262b; font-size:18px; }
       .composer button.attach:disabled { opacity:.5; }
     </style></head><body>
-    <h1>Agent Isle <button class="bell" id="bell" onclick="toggleNotifications()">…</button></h1>
+    <h1>Agent Isle
+      <button class="bell" id="bell" onclick="toggleNotifications()">
+        <svg class="bellIcon" viewBox="0 0 24 24" width="14" height="14" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          <line class="bellSlash" x1="3" y1="3" x2="21" y2="21"/>
+        </svg>
+        <span id="bellLabel">…</span>
+      </button>
+    </h1>
     <div id="root" class="empty">Loading…</div>
     <div class="hint" id="hint"></div>
     <div id="overlay">
@@ -706,9 +826,10 @@ final class RemoteActionServer {
     }
     function updateBell() {
       const bell = document.getElementById('bell');
+      const label = document.getElementById('bellLabel');
       const hint = document.getElementById('hint');
       if (!('Notification' in window)) {
-        bell.textContent = '🔕 Notifications unavailable'; bell.className = 'bell muted';
+        label.textContent = 'Notifications unavailable'; bell.className = 'bell muted';
         // Two distinct blockers can produce this same "API doesn't exist" state — tell
         // the user which one actually applies instead of always blaming HTTPS, which
         // would be wrong (and had been shown as wrong) once the page is already secure.
@@ -718,13 +839,13 @@ final class RemoteActionServer {
         return;
       }
       if (Notification.permission === 'granted') {
-        bell.textContent = '🔔 Notifications on'; bell.className = 'bell';
+        label.textContent = 'Notifications on'; bell.className = 'bell';
         hint.textContent = '';
       } else if (Notification.permission === 'denied') {
-        bell.textContent = '🔕 Notifications blocked'; bell.className = 'bell muted';
+        label.textContent = 'Notifications blocked'; bell.className = 'bell muted';
         hint.textContent = 'Re-enable them for this site in your browser settings.';
       } else {
-        bell.textContent = '🔔 Enable notifications'; bell.className = 'bell';
+        label.textContent = 'Enable notifications'; bell.className = 'bell';
         hint.textContent = 'On iPhone: add this page to your Home Screen first, or notifications won\\'t fire.';
       }
     }

@@ -138,8 +138,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         // Wire up remote (mobile) approvals — the listener itself only starts on the
-        // first "Approve from phone" tap, so this doesn't open anything yet.
-        RemoteActionServer.shared.attach(to: store)
+        // first "Approve from phone" tap, so this doesn't open anything yet. Skipped in
+        // demo mode, same as EventServer above: a persisted real pairing token would
+        // otherwise silently reopen the LAN/Tailscale-exposed listener during what's meant
+        // to be an inert marketing/demo launch.
+        if !demoLaunch {
+            RemoteActionServer.shared.attach(to: store)
+        }
 
         if demoLaunch {
             store.startDemo()
