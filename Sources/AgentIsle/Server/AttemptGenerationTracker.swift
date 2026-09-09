@@ -25,10 +25,20 @@ final class AttemptGenerationTracker: @unchecked Sendable {
         generations.withLock { $0[channel] == generation }
     }
 
-    /// Forget a channel's tracked attempt. Call when the channel's owner (e.g. a removed
-    /// session) can no longer act on an outcome, so the store doesn't grow forever.
+    /// Forget a channel's tracked attempt. Call when the channel's owner (e.g. a removed or
+    /// archived session) can no longer act on an outcome. Bumps the generation rather than
+    /// deleting the entry: a channel key can be reused (e.g. a session archived and later
+    /// reactivated, or a re-created attempt on the same name), and deleting would let a fresh
+    /// `begin` restart from 1 — colliding with a still in-flight, now-abandoned attempt at
+    /// that same generation number, which could then have its stale outcome misapplied as the
+    /// new attempt's result. Only bumps an entry that already exists: a caller that forgets
+    /// every channel for an owner regardless of whether any of them were ever actually used
+    /// would otherwise plant a permanent, never-cleaned entry for every such no-op.
     func forget(_ channel: AnyHashable) {
-        generations.withLock { $0[channel] = nil }
+        generations.withLock { values in
+            guard let current = values[channel] else { return }
+            values[channel] = current + 1
+        }
     }
 
     /// Forget every tracked channel at once — cheaper than forgetting each individually when

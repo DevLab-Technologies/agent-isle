@@ -126,10 +126,16 @@ bash Scripts/uninstall-cursor-hooks.sh # remove them (monitoring still works)
 **Grok CLI / GitHub Copilot CLI** — detected automatically from `~/.grok/sessions`
 and `~/.copilot/history-session-state`. Nothing to configure.
 
-**Any other tool** — POST to the event server:
+**Any other tool** — POST to the event server. Every request needs
+`X-Agent-Isle-Token`, matching the file Agent Isle writes on first launch at
+`~/.agent-isle/token` (directory `0700`, file `0600`). Missing or wrong token
+returns `401 {"ok":false,"error":"unauthorized"}`.
 
 ```bash
-curl -X POST http://localhost:4711/event -H 'Content-Type: application/json' -d '{
+curl -X POST http://localhost:4711/event \
+  -H 'Content-Type: application/json' \
+  -H "X-Agent-Isle-Token: $(cat ~/.agent-isle/token)" \
+  -d '{
   "type": "status", "session": "my-session", "agent": "codex",
   "title": "build api", "terminal": "iTerm",
   "status": "working", "message": "Writing routes/users.ts"

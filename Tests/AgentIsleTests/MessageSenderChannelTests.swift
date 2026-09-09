@@ -39,6 +39,18 @@ final class MessageSenderChannelTests: XCTestCase {
         XCTAssertFalse(MessageSender.isCurrentAttempt(generation, on: channel))
     }
 
+    /// Forgetting a channel that never had an attempt must stay a true no-op — not plant an
+    /// entry that lingers forever. `clearAllSendErrors` forgets all three `SendKind`s for
+    /// every session on removal/archival/`.done`, regardless of whether that kind was ever
+    /// actually sent, so a channel that was never used must not leave a trace: the next
+    /// attempt on it should still start at generation 1.
+    func testForgettingAnUntouchedChannelLeavesNoTrace() {
+        let channel = UUID()
+        MessageSender.forgetChannel(channel)
+        let generation = MessageSender.beginAttempt(on: channel)
+        XCTAssertEqual(generation, 1)
+    }
+
     func testForgetAllChannelsInvalidatesEveryTrackedAttempt() {
         let channelA = UUID(), channelB = UUID()
         let generationA = MessageSender.beginAttempt(on: channelA)
