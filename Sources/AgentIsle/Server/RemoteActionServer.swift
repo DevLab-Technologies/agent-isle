@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// One address the mobile page is reachable at, and the token-scoped URL to reach it.
 struct RemoteAccessLink {
@@ -61,10 +62,13 @@ final class RemoteActionServer {
     private var httpsListener: NWListener?
     private var tailscaleHTTPS: (dnsName: String, expiresAt: Date)?
     private var tailscaleSetupStarted = false
-    // Bumped by disconnect() so a Tailscale HTTPS setup attempt still in flight when the
-    // user disconnects can recognize it's been superseded and discard its result instead
-    // of reopening a listener the user just closed.
-    private var tailscaleGeneration = 0
+    // Bumped (via a new "begin") by disconnect() so a Tailscale HTTPS setup attempt still
+    // in flight when the user disconnects can recognize it's been superseded and discard
+    // its result instead of reopening a listener the user just closed, or sweeping a newer
+    // attempt's keychain file. `nonisolated` and lock-backed, so the background setup task
+    // can check it without a MainActor hop.
+    nonisolated private static let tailscaleChannel = "tailscale-https"
+    nonisolated private static let tailscaleAttempts = AttemptGenerationTracker()
     // The keychain file backing the currently-live HTTPS identity, if any — passed to
     // TLSIdentity.make so a stale, still-running setup attempt's cleanup sweep never
     // deletes the file a newer, already-succeeded attempt is actively serving TLS from.
@@ -132,7 +136,7 @@ final class RemoteActionServer {
         tailscaleHTTPS = nil
         tailscaleSetupStarted = false
         activeKeychainFileName = nil
-        tailscaleGeneration += 1
+        _ = Self.tailscaleAttempts.begin(on: Self.tailscaleChannel)
     }
 
     private static func loadPersistedToken() -> (token: String, expiresAt: Date)? {
@@ -182,29 +186,26 @@ final class RemoteActionServer {
     private func setUpTailscaleHTTPSIfNeeded() {
         guard !tailscaleSetupStarted else { return }
         tailscaleSetupStarted = true
-        let generation = tailscaleGeneration
+        let generation = Self.tailscaleAttempts.begin(on: Self.tailscaleChannel)
         Task.detached(priority: .utility) { [weak self] in
             guard let result = await Self.buildTailscaleHTTPSSetup(generation: generation) else {
                 // Setup failed, hit the timeout, or was superseded by a disconnect — let a
                 // later call try again instead of leaving this stuck true (and the feature
                 // silently dead) for the rest of the launch.
-                await self?.resetTailscaleSetupStarted()
+                await self?.resetTailscaleSetupStarted(generation: generation)
                 return
             }
             await self?.startHTTPSListener(result, generation: generation)
         }
     }
 
-    private func resetTailscaleSetupStarted() {
+    /// Only resets the flag if `generation` is still the current attempt — otherwise this is
+    /// a stale attempt's own cleanup firing after a disconnect (and reconnect) already
+    /// started a newer, still-in-flight attempt, and clearing the flag here would incorrectly
+    /// free a slot for a third attempt to start at the same generation as that second one.
+    private func resetTailscaleSetupStarted(generation: Int) {
+        guard Self.tailscaleAttempts.isCurrent(generation, on: Self.tailscaleChannel) else { return }
         tailscaleSetupStarted = false
-    }
-
-    /// Whether a Tailscale HTTPS setup attempt started at `generation` has since been
-    /// superseded by a disconnect() (which bumps `tailscaleGeneration`) — checked from a
-    /// background task right before it touches the keychain, since that work can't be
-    /// cancelled once started.
-    private func isStaleTailscaleAttempt(generation: Int) -> Bool {
-        generation != tailscaleGeneration
     }
 
     private struct PreparedCert {
@@ -229,31 +230,63 @@ final class RemoteActionServer {
     /// one feature unavailable. If the timeout wins, the stuck task is abandoned (Swift
     /// concurrency can't preempt a blocked system call) but the app itself stays responsive,
     /// and the Tailscale link just stays plain HTTP, same as if this had failed outright.
+    ///
+    /// Deliberately NOT a `withTaskGroup` race: a task group must await every child task —
+    /// including ones `cancelAll()` only marked cancelled, not actually stopped — before its
+    /// scope can exit, so a hung, cancellation-blind child would keep this function (and the
+    /// 45s timeout it's supposed to honor) blocked for however long the hang actually lasts.
+    /// Racing two plain, unstructured `Task`s via a continuation instead lets this function
+    /// return at the timeout regardless of whether the slow task is still running.
     nonisolated private static func buildTailscaleHTTPSSetup(generation: Int) async -> HTTPSSetup? {
-        await withTaskGroup(of: HTTPSSetup?.self) { group -> HTTPSSetup? in
-            group.addTask {
-                guard let prepared = prepareTailscaleHTTPS() else { return nil }
-                // Re-check right before the keychain work, which can't be cancelled once
-                // started: a disconnect() while this attempt was blocked in the network
-                // round trip above means the result is stale and must not touch the
-                // currently-live keychain file or reopen a listener the user just closed.
-                guard await !RemoteActionServer.shared.isStaleTailscaleAttempt(generation: generation) else { return nil }
-                let keepActive = await RemoteActionServer.shared.activeKeychainFileName
-                guard let made = TLSIdentity.make(certPEM: prepared.certPEM, keyPEM: prepared.keyPEM,
-                                                  in: tlsDirectory, keepingActive: keepActive) else {
-                    NSLog("RemoteActionServer: couldn't build a TLS identity from the Tailscale cert")
-                    return nil
-                }
-                return HTTPSSetup(identity: made.identity, dnsName: prepared.dnsName, expiresAt: prepared.expiresAt,
-                                  keychainFileName: made.fileName)
+        let work = Task.detached(priority: .utility) {
+            await performTailscaleHTTPSSetup(generation: generation)
+        }
+        return await raceAgainstTimeout(work, seconds: 45)
+    }
+
+    nonisolated private static func performTailscaleHTTPSSetup(generation: Int) async -> HTTPSSetup? {
+        guard let prepared = prepareTailscaleHTTPS() else { return nil }
+        // Re-check right before the keychain work, which can't be cancelled once started: a
+        // disconnect() while this attempt was blocked in the network round trip above means
+        // the result is stale and must not touch the currently-live keychain file or reopen
+        // a listener the user just closed.
+        guard tailscaleAttempts.isCurrent(generation, on: tailscaleChannel) else { return nil }
+        let keepActive = await RemoteActionServer.shared.activeKeychainFileName
+        guard let made = TLSIdentity.make(certPEM: prepared.certPEM, keyPEM: prepared.keyPEM,
+                                          in: tlsDirectory, keepingActive: keepActive) else {
+            NSLog("RemoteActionServer: couldn't build a TLS identity from the Tailscale cert")
+            return nil
+        }
+        return HTTPSSetup(identity: made.identity, dnsName: prepared.dnsName, expiresAt: prepared.expiresAt,
+                          keychainFileName: made.fileName)
+    }
+
+    /// Resumes with `work`'s result, or with `nil` after `seconds` — whichever comes first —
+    /// without waiting for the loser. `work` keeps running independently either way; only a
+    /// plain, unstructured `Task` (not a `withTaskGroup` child) can be abandoned like this.
+    private final class RaceResumeGuard: @unchecked Sendable {
+        private let lock = OSAllocatedUnfairLock(initialState: false)
+        /// Returns true the first time it's called; false on every call after.
+        func claim() -> Bool {
+            lock.withLock { used in
+                guard !used else { return false }
+                used = true
+                return true
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 45 * 1_000_000_000)
-                return nil
+        }
+    }
+
+    nonisolated private static func raceAgainstTimeout<T: Sendable>(_ work: Task<T?, Never>, seconds: UInt64) async -> T? {
+        let resumeGuard = RaceResumeGuard()
+        return await withCheckedContinuation { continuation in
+            Task {
+                let value = await work.value
+                if resumeGuard.claim() { continuation.resume(returning: value) }
             }
-            let result = await group.next()
-            group.cancelAll()
-            return result ?? nil
+            Task {
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                if resumeGuard.claim() { continuation.resume(returning: nil) }
+            }
         }
     }
 
@@ -282,7 +315,7 @@ final class RemoteActionServer {
     private func startHTTPSListener(_ setup: HTTPSSetup, generation: Int) {
         // Superseded by a disconnect() since this attempt started — discard the result
         // rather than reopening a listener the user just explicitly closed.
-        guard generation == tailscaleGeneration else { return }
+        guard Self.tailscaleAttempts.isCurrent(generation, on: Self.tailscaleChannel) else { return }
         guard httpsListener == nil else {
             tailscaleHTTPS = (setup.dnsName, setup.expiresAt)
             return
@@ -293,14 +326,19 @@ final class RemoteActionServer {
         params.allowLocalEndpointReuse = true
         do {
             let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: Self.httpsPort)!)
-            listener.stateUpdateHandler = { [weak self] state in
-                if case .failed(let error) = state {
-                    NSLog("RemoteActionServer HTTPS failed: \(error)")
-                    // Mirrors the plain listener's fix — without this, a dead-but-non-nil
-                    // httpsListener would permanently no-op every future rebind attempt.
-                    Task { @MainActor [weak self] in self?.httpsListener = nil }
+            installFailureHandler(
+                on: listener, label: "HTTPS ",
+                isStillCurrent: { [weak self, weak listener] in self?.httpsListener === listener },
+                onFailed: { [weak self] in
+                    // A listener that fails only after it already started successfully
+                    // must also stop being advertised (link(for:) reads tailscaleHTTPS, not
+                    // httpsListener) and must let a later "Connect phone" retry rather than
+                    // leaving tailscaleSetupStarted stuck true forever.
+                    self?.httpsListener = nil
+                    self?.tailscaleHTTPS = nil
+                    self?.tailscaleSetupStarted = false
                 }
-            }
+            )
             listener.newConnectionHandler = { [weak self] conn in
                 conn.stateUpdateHandler = { state in
                     if case .failed(let error) = state { NSLog("RemoteActionServer HTTPS conn failed: \(error)") }
@@ -329,22 +367,41 @@ final class RemoteActionServer {
 
     // MARK: - Listener
 
+    /// Installs a `.failed` handler on `listener` that runs `onFailed` — but only once
+    /// `isStillCurrent` confirms the property this listener is stored in still holds this
+    /// exact instance, so a delayed failure callback from an already-superseded listener
+    /// (torn down by disconnect() and replaced by a newer one before its terminal state
+    /// arrives) can never act on stale state. Shared by both listeners below.
+    private func installFailureHandler(on listener: NWListener, label: String,
+                                        isStillCurrent: @escaping @MainActor () -> Bool,
+                                        onFailed: @escaping @MainActor () -> Void) {
+        listener.stateUpdateHandler = { state in
+            guard case .failed(let error) = state else { return }
+            NSLog("RemoteActionServer \(label)failed: \(error)")
+            Task { @MainActor in
+                guard isStillCurrent() else { return }
+                onFailed()
+            }
+        }
+    }
+
     private func start() {
         guard listener == nil else { return }
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
             let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: Self.port)!)
-            listener.stateUpdateHandler = { [weak self] state in
-                if case .failed(let error) = state {
-                    NSLog("RemoteActionServer failed: \(error)")
+            installFailureHandler(
+                on: listener, label: "",
+                isStillCurrent: { [weak self, weak listener] in self?.listener === listener },
+                onFailed: { [weak self] in
                     // The bind can fail asynchronously (e.g. the port's already in use) well
                     // after this listener was already stashed in self.listener — clear it so
                     // a later start() (via currentLink()) actually retries instead of seeing
                     // a non-nil-but-dead listener forever.
-                    Task { @MainActor [weak self] in self?.listener = nil }
+                    self?.listener = nil
                 }
-            }
+            )
             listener.newConnectionHandler = { [weak self] conn in
                 conn.stateUpdateHandler = { state in
                     if case .failed(let error) = state { NSLog("RemoteActionServer conn failed: \(error)") }
@@ -550,9 +607,12 @@ final class RemoteActionServer {
         guard let store else { respondJSON(conn, ["sessions": []]); return }
         // The state route is polled every ~2s regardless of whether history is open, so
         // it's a natural place to evict cache entries for sessions that no longer exist —
-        // otherwise historyCache grows without bound for the life of the process.
-        let liveIDs = Set(store.sessions.map(\.id))
-        historyCache = historyCache.filter { liveIDs.contains($0.key) }
+        // otherwise historyCache grows without bound for the life of the process. Skipped
+        // whenever there's nothing cached yet, the common case for most phone sessions.
+        if !historyCache.isEmpty {
+            let liveIDs = Set(store.sessions.map(\.id))
+            historyCache = historyCache.filter { liveIDs.contains($0.key) }
+        }
         let sessions: [[String: Any]] = store.sessions.map { session in
             var obj: [String: Any] = ["session": session.id.uuidString,
                                       "title": session.title,
