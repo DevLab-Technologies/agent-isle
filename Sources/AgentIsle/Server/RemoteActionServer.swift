@@ -298,7 +298,7 @@ final class RemoteActionServer {
                     NSLog("RemoteActionServer HTTPS failed: \(error)")
                     // Mirrors the plain listener's fix — without this, a dead-but-non-nil
                     // httpsListener would permanently no-op every future rebind attempt.
-                    Task { @MainActor in self?.httpsListener = nil }
+                    Task { @MainActor [weak self] in self?.httpsListener = nil }
                 }
             }
             listener.newConnectionHandler = { [weak self] conn in
@@ -342,7 +342,7 @@ final class RemoteActionServer {
                     // after this listener was already stashed in self.listener — clear it so
                     // a later start() (via currentLink()) actually retries instead of seeing
                     // a non-nil-but-dead listener forever.
-                    Task { @MainActor in self?.listener = nil }
+                    Task { @MainActor [weak self] in self?.listener = nil }
                 }
             }
             listener.newConnectionHandler = { [weak self] conn in
