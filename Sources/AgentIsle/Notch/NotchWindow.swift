@@ -140,11 +140,18 @@ final class NotchWindow: NSPanel {
 
     private func syncHoverToPointer() {
         guard let view = contentView as? PassthroughView else { return }
-        // `interactiveRect` is in the borderless window's base coordinates, so it
-        // converts straight to screen space for comparison with the cursor.
-        let screenRect = convertToScreen(view.interactiveRect)
-        let inside = screenRect.contains(NSEvent.mouseLocation)
-        MainActor.assumeIsolated { store.setHovering(inside) }
+        MainActor.assumeIsolated {
+            // A popover anchored to something in the island (e.g. the remote-approval QR
+            // popup) renders in its own window, outside `interactiveRect` — without this,
+            // moving toward a control near the popover's bottom reads as the pointer
+            // leaving the island and collapses it, taking the popover down with it.
+            guard !store.popoverActive else { store.setHovering(true); return }
+            // `interactiveRect` is in the borderless window's base coordinates, so it
+            // converts straight to screen space for comparison with the cursor.
+            let screenRect = convertToScreen(view.interactiveRect)
+            let inside = screenRect.contains(NSEvent.mouseLocation)
+            store.setHovering(inside)
+        }
     }
 
     /// (Re)declare that the island lives on every Space.

@@ -110,6 +110,7 @@ struct ExpandedIsland: View {
                     .foregroundStyle(Theme.Ink.tertiary)
                     .lineLimit(1)
                 muteButton
+                RemoteApprovalButton()
                 settingsMenu
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
