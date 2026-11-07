@@ -104,7 +104,7 @@ struct SwitcherView: View {
                         .font(Theme.Font.title(12))
                         .foregroundStyle(Theme.Ink.primary)
                         .lineLimit(1)
-                    Text(session.lastMessage)
+                    Text(ChatMessageView.chatMarkdown(session.lastMessage))
                         .font(Theme.Font.body(10))
                         .foregroundStyle(Theme.Ink.secondary)
                         .lineLimit(1)

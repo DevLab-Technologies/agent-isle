@@ -84,7 +84,7 @@ struct SessionRow: View {
                         ArchiveButton { store.archive(id: session.id) }
                     }
                 }
-                Text(session.lastMessage)
+                Text(ChatMessageView.chatMarkdown(session.lastMessage))
                     .font(Theme.Font.prose(11))
                     .foregroundStyle(Theme.Ink.secondary)
                     .lineLimit(1)
