@@ -204,10 +204,37 @@ struct ChatMessageView: View {
         }
     }
 
+    /// Agents answer in Markdown, so render it instead of showing raw `**`.
+    /// Inline syntax (bold/italic/`code`/links) via AttributedString with line breaks kept;
+    /// list markers become bullets and headings become bold lines. Raw text on parse failure.
+    static func chatMarkdown(_ text: String) -> AttributedString {
+        let lines = text.components(separatedBy: "\n").map { line -> String in
+            let body = line.drop(while: { $0 == " " })
+            let indent = String(repeating: " ", count: line.count - body.count)
+            if body.hasPrefix("- ") || body.hasPrefix("* ") {
+                return indent + "• " + body.dropFirst(2)
+            }
+            if let hashes = body.firstIndex(where: { $0 != "#" }), hashes != body.startIndex,
+               body.distance(from: body.startIndex, to: hashes) <= 6,
+               body[hashes] == " " {
+                let title = body[hashes...].trimmingCharacters(in: .whitespaces)
+                return title.isEmpty ? line : "**\(title)**"
+            }
+            return line
+        }
+        let source = lines.joined(separator: "\n")
+        if let attributed = try? AttributedString(
+            markdown: source,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+            return attributed
+        }
+        return AttributedString(text)
+    }
+
     @ViewBuilder private func blockView(_ block: ChatBlock) -> some View {
         switch block {
         case .text(let text):
-            Text(text)
+            Text(Self.chatMarkdown(text))
                 .font(Theme.Font.prose(11.5))
                 .foregroundStyle(.white.opacity(message.role == .user ? 0.95 : 0.85))
                 .textSelection(.enabled)
