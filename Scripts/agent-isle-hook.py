@@ -292,6 +292,11 @@ def should_ask(mode, tool, tool_input=None, cwd=""):
         return False
     if mode == "bypassPermissions" or mode == "plan":
         return False
+    # Auto mode: Claude Code's own classifier approves or blocks each call without a
+    # prompt. Parking it here would stall every unlisted command until the island times
+    # out; if Claude Code does decide to ask, its native prompt still appears.
+    if mode == "auto":
+        return False
     # The user's own rules — including every "don't ask again" Claude Code has recorded —
     # decide before any heuristic. A deny needs no prompt either: staying quiet lets
     # Claude Code block the call itself, and an `ask` rule outranks acceptEdits.
