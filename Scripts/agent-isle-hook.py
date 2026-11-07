@@ -589,8 +589,23 @@ def main():
                       message=f"Ran {tool}"))
 
         elif kind == "notification":
+            # A notification means Claude is NOT working: map it to the state the user has
+            # to act on. `idle_prompt` ("waiting for your input") arrives ~60s after Stop,
+            # which already reported done; re-posting would undo a session the user has
+            # since acknowledged. Unknown types (auth_success, ...) leave the status alone.
             msg = hook.get("message", "Waiting for input")
-            post(dict(base, type="status", status="working", message=msg))
+            ntype = hook.get("notification_type") or ""
+            low = msg.lower()
+            if ntype == "idle_prompt" or "waiting for your input" in low:
+                status = None
+            elif ntype == "permission_prompt" or "permission" in low:
+                status = "waiting"
+            elif ntype == "elicitation_dialog":
+                status = "asking"
+            else:
+                status = None
+            if status:
+                post(dict(base, type="status", status=status, message=msg))
 
         elif kind == "userprompt":
             prompt = hook.get("prompt", "")

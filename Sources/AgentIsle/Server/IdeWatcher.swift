@@ -129,6 +129,7 @@ final class IdeWatcher {
                     return q
                 }()
                 let newlySurfaced = transcriptQuestion != nil && existing.question != transcriptQuestion
+                let doneMark = store.doneAt[id]
 
                 store.update(id: id) { s in
                     s.title = title
@@ -167,7 +168,12 @@ final class IdeWatcher {
                         // No live transcript question — clear a stale transcript-sourced one.
                         if s.question?.source == .transcript { s.question = nil }
                         s.lastMessage = activity.text
-                        if s.permission == nil && s.question == nil {
+                        // Once the Stop hook has ended the turn, a recent mtime doesn't mean
+                        // "working": leave the status (Done, or Idle once acknowledged) alone
+                        // until the transcript moves on. The few seconds of slack cover the
+                        // stop-hook bookkeeping Claude writes right after the Stop event.
+                        let turnEnded = doneMark.map { c.mtime <= $0.addingTimeInterval(5) } ?? false
+                        if s.permission == nil && s.question == nil && !turnEnded {
                             s.status = working ? .working : .idle
                         }
                     }
