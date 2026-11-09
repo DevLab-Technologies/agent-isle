@@ -16,6 +16,41 @@ enum TranscriptReader {
         var question: AgentQuestion? = nil
     }
 
+    /// When the session last really did something — the newest entry in the tail
+    /// that counts as activity (see `activityTimestamp`). nil when the tail has none, i.e.
+    /// "long ago". Unlike the file's mtime this ignores the bookkeeping an idle session
+    /// keeps appending (artifact ledgers, away summaries, titles…).
+    static func lastRealActivity(in url: URL, maxBytes: Int = 96 * 1024) -> Date? {
+        for raw in tailLines(of: url, maxBytes: maxBytes).reversed() {
+            guard let d = raw.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            if let t = activityTimestamp(obj) { return t }
+        }
+        return nil
+    }
+
+    /// Retrospective/status `system` entries Claude Code writes while nothing is running
+    /// (on resume, after a turn, or while the user is away).
+    private static let idleSystemSubtypes: Set<String> = [
+        "away_summary", "stop_hook_summary", "turn_duration", "bridge_status", "informational",
+    ]
+
+    /// The timestamp of a transcript entry that marks real session activity, or nil.
+    /// Entries without a top-level `timestamp` (ledgers, titles, last-prompt, mode…) never
+    /// count. Of the timestamped ones everything counts except the idle bookkeeping above
+    /// and the SessionStart hook output written when a session is merely resumed — a
+    /// denylist, so an unknown new entry type errs towards "working", never towards
+    /// hiding real work.
+    static func activityTimestamp(_ obj: [String: Any]) -> Date? {
+        guard let raw = obj["timestamp"] as? String, let date = parseISO(raw) else { return nil }
+        if (obj["type"] as? String) == "system",
+           let sub = obj["subtype"] as? String, idleSystemSubtypes.contains(sub) { return nil }
+        if (obj["type"] as? String) == "attachment",
+           let a = obj["attachment"] as? [String: Any],
+           (a["hookEvent"] as? String) == "SessionStart" { return nil }
+        return date
+    }
+
     /// Generic tail reader: walk the last chunk of a JSONL file newest-first and return
     /// the first non-nil result of `transform`, condensed to one line.
     static func lastText(in url: URL, maxBytes: Int = 48 * 1024,
@@ -333,6 +368,17 @@ enum TranscriptReader {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
+
+    private static let isoWhole: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    /// ISO-8601 with or without fractional seconds.
+    static func parseISO(_ s: String) -> Date? {
+        iso.date(from: s) ?? isoWhole.date(from: s)
+    }
 
     /// Parses the tail of a transcript into an ordered list of chat messages for the
     /// live conversation view. Reads a generous tail (transcripts can be huge) and keeps
